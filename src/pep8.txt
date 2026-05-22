@@ -1,0 +1,14 @@
+PEP 8 - Python Code Style Guide
+
+## Naming Conventions
+- 변수명: snake_case 사용 (예: user_name, total_count)
+- 함수명: snake_case 사용 (예: calculate_total, get_user_data)
+- 클래스명: PascalCase 사용 (예: UserProfile, DataProcessor)
+- 상수명: UPPER_SNAKE_CASE 사용 (예: MAX_RETRIES, DEFAULT_TIMEOUT)
+
+## Indentation
+- 4 spaces per indentation level (tab 사용 금지)
+
+## Line Length
+- 최대 79 characters
+- 주석/문서열은 72 characters

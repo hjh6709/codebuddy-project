@@ -1,0 +1,9 @@
+Google Java Style Guide
+## Naming
+- Class names are written in UpperCamelCase.
+- Method names are written in lowerCamelCase.
+## Formatting
+- Indentation is 2 spaces.
+- Column limit is 100 characters.
+## Imports
+- No wildcards in import statements.
