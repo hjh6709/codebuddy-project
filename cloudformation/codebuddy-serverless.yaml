@@ -66,6 +66,16 @@
         }
       }
     },
+    "WebhookSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Description": "HMAC secret for the CodeBuddy GitHub webhook",
+        "GenerateSecretString": {
+          "PasswordLength": 48,
+          "ExcludePunctuation": true
+        }
+      }
+    },
     "OrchestratorRole": {
       "Type": "AWS::IAM::Role",
       "Properties": {
@@ -91,6 +101,16 @@
               "Resource": {"Fn::GetAtt": ["ReviewWorkerFunction", "Arn"]}
             }]
           }
+        }, {
+          "PolicyName": "ReadGitHubWebhookSecret",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": ["secretsmanager:GetSecretValue"],
+              "Resource": {"Ref": "WebhookSecret"}
+            }]
+          }
         }]
       }
     },
@@ -110,7 +130,8 @@
         "Environment": {
           "Variables": {
             "WORKER_FUNCTION_NAME": {"Ref": "ReviewWorkerFunction"},
-            "ALLOWED_ORIGIN": {"Ref": "AllowedOrigin"}
+            "ALLOWED_ORIGIN": {"Ref": "AllowedOrigin"},
+            "WEBHOOK_SECRET_ARN": {"Ref": "WebhookSecret"}
           }
         }
       }
@@ -165,6 +186,39 @@
         }
       }
     },
+    "WebhookResource": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "RestApiId": {"Ref": "ReviewApi"},
+        "ParentId": {"Fn::GetAtt": ["ReviewApi", "RootResourceId"]},
+        "PathPart": "webhook"
+      }
+    },
+    "GitHubWebhookResource": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "RestApiId": {"Ref": "ReviewApi"},
+        "ParentId": {"Ref": "WebhookResource"},
+        "PathPart": "github"
+      }
+    },
+    "GitHubWebhookPostMethod": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "RestApiId": {"Ref": "ReviewApi"},
+        "ResourceId": {"Ref": "GitHubWebhookResource"},
+        "HttpMethod": "POST",
+        "AuthorizationType": "NONE",
+        "ApiKeyRequired": false,
+        "Integration": {
+          "Type": "AWS_PROXY",
+          "IntegrationHttpMethod": "POST",
+          "Uri": {
+            "Fn::Sub": "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrchestratorFunction.Arn}/invocations"
+          }
+        }
+      }
+    },
     "ApiInvokePermission": {
       "Type": "AWS::Lambda::Permission",
       "Properties": {
@@ -178,8 +232,15 @@
     },
     "ReviewDeployment": {
       "Type": "AWS::ApiGateway::Deployment",
-      "DependsOn": ["ReviewPostMethod", "ReviewOptionsMethod"],
-      "Properties": {"RestApiId": {"Ref": "ReviewApi"}}
+      "DependsOn": [
+        "ReviewPostMethod",
+        "ReviewOptionsMethod",
+        "GitHubWebhookPostMethod"
+      ],
+      "Properties": {
+        "RestApiId": {"Ref": "ReviewApi"},
+        "Description": "CodeBuddy review API with GitHub webhook v2"
+      }
     },
     "ReviewStage": {
       "Type": "AWS::ApiGateway::Stage",
@@ -187,13 +248,22 @@
         "RestApiId": {"Ref": "ReviewApi"},
         "DeploymentId": {"Ref": "ReviewDeployment"},
         "StageName": "prod",
-        "MethodSettings": [{
-          "HttpMethod": "*",
-          "ResourcePath": "/*",
-          "MetricsEnabled": true,
-          "ThrottlingBurstLimit": 10,
-          "ThrottlingRateLimit": 5
-        }]
+        "MethodSettings": [
+          {
+            "HttpMethod": "*",
+            "ResourcePath": "/*",
+            "MetricsEnabled": true,
+            "ThrottlingBurstLimit": 10,
+            "ThrottlingRateLimit": 5
+          },
+          {
+            "HttpMethod": "POST",
+            "ResourcePath": "/~1webhook~1github",
+            "MetricsEnabled": true,
+            "ThrottlingBurstLimit": 5,
+            "ThrottlingRateLimit": 2
+          }
+        ]
       }
     },
     "ReviewApiKey": {
@@ -235,6 +305,12 @@
       }
     },
     "ApiKeyId": {"Value": {"Ref": "ReviewApiKey"}},
+    "GitHubWebhookUrl": {
+      "Value": {
+        "Fn::Sub": "https://${ReviewApi}.execute-api.${AWS::Region}.amazonaws.com/prod/webhook/github"
+      }
+    },
+    "WebhookSecretArn": {"Value": {"Ref": "WebhookSecret"}},
     "OrchestratorFunctionArn": {
       "Value": {"Fn::GetAtt": ["OrchestratorFunction", "Arn"]}
     },

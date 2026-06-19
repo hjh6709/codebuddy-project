@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -265,6 +267,193 @@ class ReviewApiTests(unittest.TestCase):
     def test_parse_pr_url_rejects_zero_pr_number(self):
         with self.assertRaisesRegex(RequestError, "positive"):
             parse_pr_url("https://github.com/owner/repo/pull/0")
+
+
+class GitHubWebhookTests(unittest.TestCase):
+    def build_event(self, event_name, payload, secret="webhook-secret"):
+        body = json.dumps(payload, separators=(",", ":"))
+        signature = hmac.new(
+            secret.encode(),
+            body.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return {
+            "resource": "/webhook/github",
+            "httpMethod": "POST",
+            "headers": {
+                "X-GitHub-Event": event_name,
+                "X-Hub-Signature-256": f"sha256={signature}",
+            },
+            "body": body,
+        }
+
+    def test_pull_request_opened_dispatches_review_worker(self):
+        payload = {
+            "action": "opened",
+            "repository": {
+                "name": "codebuddy-project",
+                "owner": {"login": "hjh6709"},
+            },
+            "pull_request": {"number": 7},
+        }
+        event = self.build_event("pull_request", payload)
+
+        with (
+            patch(
+                "codebuddy_orchestrator.get_webhook_secret",
+                return_value="webhook-secret",
+                create=True,
+            ),
+            patch(
+                "codebuddy_orchestrator.dispatch_worker"
+            ) as dispatch_worker,
+        ):
+            response = handler(event, None)
+
+        self.assertEqual(response["statusCode"], 202)
+        dispatch_worker.assert_called_once_with(
+            {
+                "owner": "hjh6709",
+                "repo": "codebuddy-project",
+                "pr_number": 7,
+                "notify_slack": True,
+                "source": "github-webhook",
+            }
+        )
+
+    def test_webhook_rejects_invalid_signature(self):
+        event = self.build_event(
+            "pull_request",
+            {"action": "opened"},
+        )
+        event["headers"]["X-Hub-Signature-256"] = "sha256=invalid"
+
+        with patch(
+            "codebuddy_orchestrator.get_webhook_secret",
+            return_value="webhook-secret",
+            create=True,
+        ):
+            response = handler(event, None)
+
+        self.assertEqual(response["statusCode"], 401)
+
+    def test_webhook_decodes_request_body_once(self):
+        event = self.build_event("ping", {"zen": "Keep it simple."})
+
+        with (
+            patch(
+                "codebuddy_orchestrator.get_webhook_secret",
+                return_value="webhook-secret",
+            ),
+            patch(
+                "codebuddy_orchestrator.decode_body",
+                wraps=codebuddy_orchestrator.decode_body,
+            ) as decode_body,
+        ):
+            response = handler(event, None)
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(decode_body.call_count, 1)
+
+    def test_webhook_returns_503_when_secret_store_is_unavailable(self):
+        class FailingSecretsClient:
+            def get_secret_value(self, **kwargs):
+                raise ClientError(
+                    {
+                        "Error": {
+                            "Code": "ServiceUnavailableException",
+                            "Message": "temporary failure",
+                        }
+                    },
+                    "GetSecretValue",
+                )
+
+        event = self.build_event("ping", {"zen": "Keep it simple."})
+        codebuddy_orchestrator._WEBHOOK_SECRET = None
+
+        with (
+            patch(
+                "codebuddy_orchestrator.get_secrets_client",
+                return_value=FailingSecretsClient(),
+            ),
+            patch.dict(
+                os.environ,
+                {"WEBHOOK_SECRET_ARN": "arn:secret"},
+                clear=True,
+            ),
+        ):
+            response = handler(event, None)
+
+        self.assertEqual(response["statusCode"], 503)
+
+    def test_webhook_ping_returns_pong_without_dispatch(self):
+        event = self.build_event("ping", {"zen": "Keep it simple."})
+
+        with (
+            patch(
+                "codebuddy_orchestrator.get_webhook_secret",
+                return_value="webhook-secret",
+                create=True,
+            ),
+            patch(
+                "codebuddy_orchestrator.dispatch_worker"
+            ) as dispatch_worker,
+        ):
+            response = handler(event, None)
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(json.loads(response["body"])["message"], "pong")
+        dispatch_worker.assert_not_called()
+
+    def test_webhook_ignores_unsupported_pull_request_action(self):
+        event = self.build_event(
+            "pull_request",
+            {"action": "closed"},
+        )
+
+        with (
+            patch(
+                "codebuddy_orchestrator.get_webhook_secret",
+                return_value="webhook-secret",
+                create=True,
+            ),
+            patch(
+                "codebuddy_orchestrator.dispatch_worker"
+            ) as dispatch_worker,
+        ):
+            response = handler(event, None)
+
+        self.assertEqual(response["statusCode"], 202)
+        self.assertEqual(json.loads(response["body"])["status"], "ignored")
+        dispatch_worker.assert_not_called()
+
+    def test_webhook_supports_reopened_and_synchronize_actions(self):
+        for action in ("reopened", "synchronize"):
+            with self.subTest(action=action):
+                payload = {
+                    "action": action,
+                    "repository": {
+                        "name": "codebuddy-project",
+                        "owner": {"login": "hjh6709"},
+                    },
+                    "pull_request": {"number": 8},
+                }
+                event = self.build_event("pull_request", payload)
+
+                with (
+                    patch(
+                        "codebuddy_orchestrator.get_webhook_secret",
+                        return_value="webhook-secret",
+                        create=True,
+                    ),
+                    patch(
+                        "codebuddy_orchestrator.dispatch_worker"
+                    ) as dispatch_worker,
+                ):
+                    response = handler(event, None)
+
+                self.assertEqual(response["statusCode"], 202)
+                dispatch_worker.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()
