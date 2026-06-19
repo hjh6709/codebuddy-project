@@ -72,6 +72,7 @@ CODEBUDDY_TOOLS_INSTRUCTION = """
 - 사용자가 복잡도, 테스트 생성, 리팩토링을 요청하면 각각 analyze_complexity, generate_unit_test, suggest_refactor를 호출합니다.
 - 실제 GitHub 댓글 또는 Slack 메시지를 보내기 전에 owner, repo, pr_number, comment 또는 message 같은 필수 파라미터가 모두 있는지 확인합니다.
 - 필수 파라미터가 빠졌다면 추측하지 말고 사용자에게 필요한 값을 질문합니다.
+- PR 조회 결과의 files_truncated 또는 patches_truncated가 true면 검토 범위가 제한됐다고 명시하고 전체 리뷰라고 단정하지 않습니다.
 - 복잡도 분석 결과는 Markdown 표로 정리합니다.
 - 생성된 테스트 코드나 리팩토링 제안을 PR 댓글로 남길 때는 읽기 쉬운 Markdown 코드 블록을 사용합니다.
 """
