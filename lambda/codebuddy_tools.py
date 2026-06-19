@@ -143,11 +143,23 @@ def normalize_pr(
     normalized_files = []
     total_patch_chars = 0
     patches_truncated = False
+    selected_files = files[:max_files]
+    aggregate_patch_chars = sum(
+        len(item.get("patch") or "")
+        for item in selected_files
+    )
+    preserve_complete_patches = (
+        aggregate_patch_chars <= max_total_patch_chars
+    )
 
-    for item in files[:max_files]:
+    for item in selected_files:
         patch = item.get("patch") or ""
         remaining = max(0, max_total_patch_chars - total_patch_chars)
-        allowed = min(max_patch_chars, remaining)
+        allowed = (
+            remaining
+            if preserve_complete_patches
+            else min(max_patch_chars, remaining)
+        )
         limited_patch = patch[:allowed]
         if len(limited_patch) < len(patch):
             patches_truncated = True
