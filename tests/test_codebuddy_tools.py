@@ -188,6 +188,53 @@ def complex_func(items):
         self.assertEqual(details["simple"]["complexity"], 1)
         self.assertGreater(details["complex_func"]["complexity"], 3)
 
+    def test_except_handler_increases_complexity_once(self):
+        event = event_for(
+            "/complexity",
+            "POST",
+            {
+                "code": (
+                    "def load_value():\n"
+                    "    try:\n"
+                    "        return read_value()\n"
+                    "    except ValueError:\n"
+                    "        return None\n"
+                )
+            },
+        )
+
+        response = handler(event, None)
+        payload = json.loads(
+            response["response"]["responseBody"]["application/json"]["body"]
+        )
+
+        self.assertEqual(payload["details"][0]["complexity"], 2)
+
+    def test_nested_function_does_not_inflate_outer_complexity(self):
+        event = event_for(
+            "/complexity",
+            "POST",
+            {
+                "code": (
+                    "def outer():\n"
+                    "    def inner(value):\n"
+                    "        if value:\n"
+                    "            return 1\n"
+                    "        return 0\n"
+                    "    return inner(True)\n"
+                )
+            },
+        )
+
+        response = handler(event, None)
+        payload = json.loads(
+            response["response"]["responseBody"]["application/json"]["body"]
+        )
+        details = {item["name"]: item for item in payload["details"]}
+
+        self.assertEqual(details["outer"]["complexity"], 1)
+        self.assertEqual(details["inner"]["complexity"], 2)
+
 
 class BedrockGenerationTests(unittest.TestCase):
     def test_handler_generates_pytest_unit_tests_with_bedrock(self):

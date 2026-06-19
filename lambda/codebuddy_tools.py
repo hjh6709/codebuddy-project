@@ -290,7 +290,15 @@ def complexity_action(rank):
 
 def cyclomatic_complexity(node):
     complexity = 1
-    for child in ast.walk(node):
+    pending = list(ast.iter_child_nodes(node))
+    while pending:
+        child = pending.pop()
+        if isinstance(
+            child,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            continue
+        pending.extend(ast.iter_child_nodes(child))
         if isinstance(
             child,
             (
@@ -305,8 +313,6 @@ def cyclomatic_complexity(node):
             complexity += 1
         elif isinstance(child, ast.BoolOp):
             complexity += max(1, len(child.values) - 1)
-        elif isinstance(child, ast.Try):
-            complexity += len(child.handlers)
     return complexity
 
 
