@@ -1,0 +1,144 @@
+import unittest
+
+from src.setup_agent import (
+    build_role_policies,
+    find_named_resource,
+    list_all,
+    wait_for_status,
+)
+
+
+class BuildPoliciesTests(unittest.TestCase):
+    def test_build_role_policies_scope_account_region_and_kb(self):
+        trust, permissions = build_role_policies(
+            account_id="123456789012",
+            region="ap-northeast-2",
+            model_id="global.anthropic.claude-sonnet-4-6",
+            knowledge_base_id="Q1ZYRCWLIW",
+        )
+
+        trust_statement = trust["Statement"][0]
+        self.assertEqual(
+            trust_statement["Principal"]["Service"],
+            "bedrock.amazonaws.com",
+        )
+        self.assertEqual(
+            trust_statement["Condition"]["StringEquals"]["aws:SourceAccount"],
+            "123456789012",
+        )
+        self.assertEqual(
+            trust_statement["Condition"]["ArnLike"]["AWS:SourceArn"],
+            "arn:aws:bedrock:ap-northeast-2:123456789012:agent/*",
+        )
+
+        statements = {item["Sid"]: item for item in permissions["Statement"]}
+        self.assertEqual(
+            statements["AgentKnowledgeBaseQuery"]["Resource"],
+            "arn:aws:bedrock:ap-northeast-2:123456789012:"
+            "knowledge-base/Q1ZYRCWLIW",
+        )
+        self.assertIn(
+            "arn:aws:bedrock:ap-northeast-2:123456789012:"
+            "inference-profile/global.anthropic.claude-sonnet-4-6",
+            statements["AgentModelInvocationPermissions"]["Resource"],
+        )
+        self.assertIn(
+            "bedrock:InvokeModelWithResponseStream",
+            statements["AgentModelInvocationPermissions"]["Action"],
+        )
+        self.assertIn(
+            "bedrock:Retrieve",
+            statements["AgentKnowledgeBaseQuery"]["Action"],
+        )
+
+
+class ResourceSelectionTests(unittest.TestCase):
+    def test_find_named_resource_returns_matching_id(self):
+        items = [
+            {"agentName": "Other", "agentId": "1"},
+            {"agentName": "CodeBuddy-Reviewer", "agentId": "2"},
+        ]
+
+        result = find_named_resource(
+            items,
+            name_key="agentName",
+            expected_name="CodeBuddy-Reviewer",
+            id_key="agentId",
+        )
+
+        self.assertEqual(result, "2")
+
+    def test_find_named_resource_returns_none_without_match(self):
+        self.assertIsNone(
+            find_named_resource(
+                [],
+                name_key="agentName",
+                expected_name="CodeBuddy-Reviewer",
+                id_key="agentId",
+            )
+        )
+
+    def test_list_all_follows_next_tokens(self):
+        calls = []
+
+        def fetch(**kwargs):
+            calls.append(kwargs)
+            if "nextToken" not in kwargs:
+                return {"items": [1], "nextToken": "NEXT"}
+            return {"items": [2]}
+
+        self.assertEqual(list_all(fetch, "items", maxResults=100), [1, 2])
+        self.assertEqual(
+            calls,
+            [{"maxResults": 100}, {"maxResults": 100, "nextToken": "NEXT"}],
+        )
+
+
+class WaitForStatusTests(unittest.TestCase):
+    def test_wait_for_status_returns_on_target(self):
+        statuses = iter(
+            [
+                {"status": "PREPARING"},
+                {"status": "PREPARED"},
+            ]
+        )
+
+        result = wait_for_status(
+            lambda: next(statuses),
+            status_key="status",
+            success_statuses={"PREPARED"},
+            failure_statuses={"FAILED"},
+            timeout=1,
+            interval=0,
+        )
+
+        self.assertEqual(result["status"], "PREPARED")
+
+    def test_wait_for_status_raises_on_failed(self):
+        with self.assertRaisesRegex(RuntimeError, "FAILED.*bad role"):
+            wait_for_status(
+                lambda: {
+                    "status": "FAILED",
+                    "failureReasons": ["bad role"],
+                },
+                status_key="status",
+                success_statuses={"PREPARED"},
+                failure_statuses={"FAILED"},
+                timeout=1,
+                interval=0,
+            )
+
+    def test_wait_for_status_times_out(self):
+        with self.assertRaisesRegex(TimeoutError, "PREPARING"):
+            wait_for_status(
+                lambda: {"status": "PREPARING"},
+                status_key="status",
+                success_statuses={"PREPARED"},
+                failure_statuses={"FAILED"},
+                timeout=0,
+                interval=0,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
