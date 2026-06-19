@@ -77,6 +77,9 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("post_pr_comment", instruction)
         self.assertIn("send_slack_message", instruction)
         self.assertIn("실제 GitHub 댓글", instruction)
+        self.assertIn("files_truncated", instruction)
+        self.assertIn("patches_truncated", instruction)
+        self.assertIn("전체 리뷰라고 단정하지 않습니다", instruction)
 
 
 class ResourceSelectionTests(unittest.TestCase):
