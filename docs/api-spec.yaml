@@ -12,8 +12,8 @@ servers:
     description: AWS API Gateway production stage
     variables:
       apiId:
-        default: abc123def4
-        description: 배포된 API Gateway REST API ID
+        default: your-api-id
+        description: "배포된 API Gateway REST API ID (예: abc123def4)"
       region:
         default: ap-northeast-2
         description: AWS 리전
