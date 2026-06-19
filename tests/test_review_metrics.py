@@ -16,14 +16,8 @@ class ReviewMetricsTests(unittest.TestCase):
         self.assertEqual(calculate_pass_rate(1, 3), 33.33)
 
     def test_calculate_pass_rate_rejects_zero_total(self):
-        try:
+        with self.assertRaisesRegex(ValueError, "total"):
             calculate_pass_rate(0, 0)
-        except ValueError as exc:
-            self.assertRegex(str(exc), "total")
-        except ZeroDivisionError:
-            self.fail("zero total must raise ValueError")
-        else:
-            self.fail("zero total must be rejected")
 
     def test_calculate_pass_rate_rejects_negative_passed(self):
         with self.assertRaisesRegex(ValueError, "passed"):
