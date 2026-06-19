@@ -86,15 +86,15 @@ class ReviewApiTests(unittest.TestCase):
         self.assertEqual(payload["pr_number"], 10)
         self.assertTrue(payload["notify_slack"])
 
-    def test_response_does_not_allow_every_cors_origin_by_default(self):
+    def test_response_omits_cors_origin_when_not_configured(self):
         response = handler(
             {"resource": "/review", "httpMethod": "OPTIONS"},
             None,
         )
 
-        self.assertNotEqual(
-            response["headers"]["Access-Control-Allow-Origin"],
-            "*",
+        self.assertNotIn(
+            "Access-Control-Allow-Origin",
+            response["headers"],
         )
 
     def test_dispatch_worker_reuses_lambda_client(self):
@@ -148,6 +148,39 @@ class ReviewApiTests(unittest.TestCase):
             patch(
                 "codebuddy_orchestrator.boto3.client",
                 return_value=FailingLambdaClient(),
+            ),
+            patch.dict(
+                os.environ,
+                {"WORKER_FUNCTION_NAME": "codebuddy-review-worker"},
+                clear=True,
+            ),
+        ):
+            response = handler(event, None)
+
+        self.assertEqual(response["statusCode"], 503)
+
+    def test_unexpected_worker_status_returns_503(self):
+        class RejectedLambdaClient:
+            def invoke(self, **kwargs):
+                return {"StatusCode": 500}
+
+        event = {
+            "resource": "/review",
+            "httpMethod": "POST",
+            "body": json.dumps(
+                {
+                    "pr_url": (
+                        "https://github.com/hjh6709/"
+                        "codebuddy-project/pull/10"
+                    )
+                }
+            ),
+        }
+
+        with (
+            patch(
+                "codebuddy_orchestrator.boto3.client",
+                return_value=RejectedLambdaClient(),
             ),
             patch.dict(
                 os.environ,

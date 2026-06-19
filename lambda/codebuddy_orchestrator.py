@@ -17,7 +17,7 @@ LOGGER.setLevel(
     )
 )
 
-ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "null")
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "")
 _LAMBDA_CLIENT = None
 
 
@@ -29,14 +29,16 @@ class RequestError(Exception):
 
 
 def respond(status_code, body):
+    headers = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Headers": "Content-Type,X-Api-Key",
+        "Access-Control-Allow-Methods": "OPTIONS,POST",
+    }
+    if ALLOWED_ORIGIN:
+        headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
     return {
         "statusCode": status_code,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-            "Access-Control-Allow-Headers": "Content-Type,X-Api-Key",
-            "Access-Control-Allow-Methods": "OPTIONS,POST",
-        },
+        "headers": headers,
         "body": json.dumps(body, ensure_ascii=False),
     }
 
@@ -88,7 +90,7 @@ def dispatch_worker(payload):
     if not function_name:
         raise RequestError(500, "WORKER_FUNCTION_NAME must be configured")
     try:
-        get_lambda_client().invoke(
+        response = get_lambda_client().invoke(
             FunctionName=function_name,
             InvocationType="Event",
             Payload=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -96,6 +98,12 @@ def dispatch_worker(payload):
     except (BotoCoreError, ClientError) as exc:
         LOGGER.error("Worker Lambda invocation failed: %s", type(exc).__name__)
         raise RequestError(503, "Worker dispatch failed, please retry") from exc
+    if response.get("StatusCode") != 202:
+        LOGGER.error(
+            "Worker Lambda rejected async invocation: status=%s",
+            response.get("StatusCode"),
+        )
+        raise RequestError(503, "Worker dispatch failed, please retry")
 
 
 def handle_review(event):
