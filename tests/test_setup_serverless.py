@@ -101,11 +101,16 @@ class TemplateTests(unittest.TestCase):
         ][0]
         usage_plan = resources["ReviewUsagePlan"]["Properties"]
 
-        self.assertEqual(method_setting["ThrottlingBurstLimit"], 5)
-        self.assertEqual(method_setting["ThrottlingRateLimit"], 2)
+        self.assertEqual(method_setting["ThrottlingBurstLimit"], 10)
+        self.assertEqual(method_setting["ThrottlingRateLimit"], 5)
         self.assertEqual(usage_plan["Throttle"]["BurstLimit"], 5)
         self.assertEqual(usage_plan["Throttle"]["RateLimit"], 2)
         self.assertEqual(usage_plan["Quota"]["Limit"], 1000)
+
+    def test_worker_timeout_leaves_margin_after_agent_read_timeout(self):
+        worker = load_template()["Resources"]["ReviewWorkerFunction"]
+
+        self.assertEqual(worker["Properties"]["Timeout"], 360)
 
     def test_orchestrator_uses_explicit_non_wildcard_cors_origin(self):
         template = load_template()

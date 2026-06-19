@@ -52,7 +52,7 @@
         "Runtime": "python3.12",
         "Handler": "codebuddy_review_worker.handler",
         "Role": {"Fn::GetAtt": ["WorkerRole", "Arn"]},
-        "Timeout": 300,
+        "Timeout": 360,
         "MemorySize": 1024,
         "Code": {
           "S3Bucket": {"Ref": "ArtifactBucket"},
@@ -191,8 +191,8 @@
           "HttpMethod": "*",
           "ResourcePath": "/*",
           "MetricsEnabled": true,
-          "ThrottlingBurstLimit": 5,
-          "ThrottlingRateLimit": 2
+          "ThrottlingBurstLimit": 10,
+          "ThrottlingRateLimit": 5
         }]
       }
     },
