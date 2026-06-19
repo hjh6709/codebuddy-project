@@ -1,4 +1,5 @@
 venv/
+.venv/
 .env
 __pycache__/
 *.pyc
@@ -6,3 +7,29 @@ __pycache__/
 .worktrees/
 .codebuddy/
 docs/superpowers/
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type/lint/tool caches
+.mypy_cache/
+.ruff_cache/
+
+# Build/package artifacts
+build/
+dist/
+*.egg-info/
+*.zip
+
+# Local temp/output
+tmp/
+temp/
+*.log
+
+# Jupyter/Colab leftovers
+.ipynb_checkpoints/
+
+# Lambda packaging temp dirs
+lambda_*_package/
