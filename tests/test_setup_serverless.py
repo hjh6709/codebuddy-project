@@ -145,9 +145,10 @@ class TemplateTests(unittest.TestCase):
 
     def test_stage_and_usage_plan_apply_throttling(self):
         resources = load_template()["Resources"]
-        method_setting = resources["ReviewStage"]["Properties"][
+        method_settings = resources["ReviewStage"]["Properties"][
             "MethodSettings"
-        ][0]
+        ]
+        method_setting = method_settings[0]
         usage_plan = resources["ReviewUsagePlan"]["Properties"]
 
         self.assertEqual(method_setting["ThrottlingBurstLimit"], 10)
@@ -155,6 +156,19 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(usage_plan["Throttle"]["BurstLimit"], 5)
         self.assertEqual(usage_plan["Throttle"]["RateLimit"], 2)
         self.assertEqual(usage_plan["Quota"]["Limit"], 1000)
+
+        webhook_setting = next(
+            (
+                setting
+                for setting in method_settings
+                if setting["ResourcePath"] == "/~1webhook~1github"
+                and setting["HttpMethod"] == "POST"
+            ),
+            None,
+        )
+        self.assertIsNotNone(webhook_setting)
+        self.assertEqual(webhook_setting["ThrottlingBurstLimit"], 5)
+        self.assertEqual(webhook_setting["ThrottlingRateLimit"], 2)
 
     def test_worker_timeout_leaves_margin_after_agent_read_timeout(self):
         worker = load_template()["Resources"]["ReviewWorkerFunction"]

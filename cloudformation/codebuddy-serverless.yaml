@@ -248,13 +248,22 @@
         "RestApiId": {"Ref": "ReviewApi"},
         "DeploymentId": {"Ref": "ReviewDeployment"},
         "StageName": "prod",
-        "MethodSettings": [{
-          "HttpMethod": "*",
-          "ResourcePath": "/*",
-          "MetricsEnabled": true,
-          "ThrottlingBurstLimit": 10,
-          "ThrottlingRateLimit": 5
-        }]
+        "MethodSettings": [
+          {
+            "HttpMethod": "*",
+            "ResourcePath": "/*",
+            "MetricsEnabled": true,
+            "ThrottlingBurstLimit": 10,
+            "ThrottlingRateLimit": 5
+          },
+          {
+            "HttpMethod": "POST",
+            "ResourcePath": "/~1webhook~1github",
+            "MetricsEnabled": true,
+            "ThrottlingBurstLimit": 5,
+            "ThrottlingRateLimit": 2
+          }
+        ]
       }
     },
     "ReviewApiKey": {
