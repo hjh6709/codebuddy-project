@@ -230,7 +230,7 @@
         }
       }
     },
-    "ReviewDeployment": {
+    "ReviewDeploymentV2": {
       "Type": "AWS::ApiGateway::Deployment",
       "DependsOn": [
         "ReviewPostMethod",
@@ -239,14 +239,14 @@
       ],
       "Properties": {
         "RestApiId": {"Ref": "ReviewApi"},
-        "Description": "CodeBuddy review API with GitHub webhook v2"
+        "Description": "CodeBuddy review API with deployed GitHub webhook v3"
       }
     },
     "ReviewStage": {
       "Type": "AWS::ApiGateway::Stage",
       "Properties": {
         "RestApiId": {"Ref": "ReviewApi"},
-        "DeploymentId": {"Ref": "ReviewDeployment"},
+        "DeploymentId": {"Ref": "ReviewDeploymentV2"},
         "StageName": "prod",
         "MethodSettings": [
           {

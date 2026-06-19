@@ -136,11 +136,20 @@ class TemplateTests(unittest.TestCase):
         )
 
     def test_api_deployment_depends_on_webhook_method(self):
-        deployment = load_template()["Resources"]["ReviewDeployment"]
+        resources = load_template()["Resources"]
+        self.assertIn("ReviewDeploymentV2", resources)
+        deployment = resources.get(
+            "ReviewDeploymentV2",
+            {"DependsOn": []},
+        )
 
         self.assertIn(
             "GitHubWebhookPostMethod",
             deployment["DependsOn"],
+        )
+        self.assertEqual(
+            resources["ReviewStage"]["Properties"]["DeploymentId"],
+            {"Ref": "ReviewDeploymentV2"},
         )
 
     def test_stage_and_usage_plan_apply_throttling(self):
