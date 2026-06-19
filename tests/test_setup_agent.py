@@ -80,6 +80,9 @@ class AgentInstructionTests(unittest.TestCase):
         self.assertIn("generate_unit_test", instruction)
         self.assertIn("suggest_refactor", instruction)
         self.assertIn("실제 GitHub 댓글", instruction)
+        self.assertIn("files_truncated", instruction)
+        self.assertIn("patches_truncated", instruction)
+        self.assertIn("전체 리뷰라고 단정하지 않습니다", instruction)
 
 
 class ResourceSelectionTests(unittest.TestCase):
