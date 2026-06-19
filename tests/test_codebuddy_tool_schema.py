@@ -31,5 +31,22 @@ class CodeBuddyToolSchemaTests(unittest.TestCase):
         self.assertIn("actual GitHub Pull Request comment", comment_description)
         self.assertIn("actual Slack message", slack_description)
 
+    def test_schema_defines_chapter8_analysis_operations(self):
+        paths = CODEBUDDY_TOOLS_OPENAPI_SCHEMA["paths"]
+
+        self.assertTrue(
+            {"/complexity", "/unittest", "/refactor"}.issubset(paths)
+        )
+
+        for path in ("/complexity", "/unittest", "/refactor"):
+            params = {
+                item["name"]: item
+                for item in paths.get(path, {}).get("post", {}).get(
+                    "parameters", []
+                )
+            }
+            self.assertIn("code", params)
+            self.assertTrue(params["code"]["required"])
+
 if __name__ == "__main__":
     unittest.main()

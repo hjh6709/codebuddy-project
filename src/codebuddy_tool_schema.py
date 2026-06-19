@@ -5,7 +5,7 @@ CODEBUDDY_TOOLS_OPENAPI_SCHEMA = {
         "version": "2.0.0",
         "description": (
             "Tools for GitHub Pull Request review workflows, Slack "
-            "notifications."
+            "notifications, and Python code analysis."
         ),
     },
     "paths": {
@@ -120,6 +120,94 @@ CODEBUDDY_TOOLS_OPENAPI_SCHEMA = {
                 ],
                 "responses": {
                     "200": {"description": "Slack message sent."},
+                },
+            }
+        },
+        "/complexity": {
+            "post": {
+                "operationId": "analyze_complexity",
+                "summary": "Analyze Python code complexity",
+                "description": (
+                    "Analyzes Python functions and returns cyclomatic "
+                    "complexity-like scores, ranks, and refactoring actions."
+                ),
+                "parameters": [
+                    {
+                        "name": "code",
+                        "in": "query",
+                        "required": True,
+                        "schema": {"type": "string", "minLength": 1},
+                        "description": "Python source code to analyze.",
+                    }
+                ],
+                "responses": {
+                    "200": {"description": "Complexity analysis results."},
+                },
+            }
+        },
+        "/unittest": {
+            "post": {
+                "operationId": "generate_unit_test",
+                "summary": "Generate pytest unit tests",
+                "description": (
+                    "Generates pytest unit test code for a supplied Python "
+                    "function or module. Use this when the user asks for "
+                    "test generation."
+                ),
+                "parameters": [
+                    {
+                        "name": "code",
+                        "in": "query",
+                        "required": True,
+                        "schema": {"type": "string", "minLength": 1},
+                        "description": "Python source code to test.",
+                    },
+                    {
+                        "name": "function_name",
+                        "in": "query",
+                        "required": False,
+                        "schema": {"type": "string"},
+                        "description": "Optional target function name.",
+                    },
+                ],
+                "responses": {
+                    "200": {"description": "Generated pytest code."},
+                },
+            }
+        },
+        "/refactor": {
+            "post": {
+                "operationId": "suggest_refactor",
+                "summary": "Suggest code refactoring",
+                "description": (
+                    "Suggests maintainability, readability, or performance "
+                    "refactoring improvements for supplied Python code."
+                ),
+                "parameters": [
+                    {
+                        "name": "code",
+                        "in": "query",
+                        "required": True,
+                        "schema": {"type": "string", "minLength": 1},
+                        "description": "Python source code to refactor.",
+                    },
+                    {
+                        "name": "focus",
+                        "in": "query",
+                        "required": False,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "readability",
+                                "performance",
+                                "maintainability",
+                            ],
+                        },
+                        "description": "Refactoring focus area.",
+                    },
+                ],
+                "responses": {
+                    "200": {"description": "Refactoring suggestion."},
                 },
             }
         },
