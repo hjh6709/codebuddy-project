@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import uuid
 
 import boto3
@@ -7,7 +8,18 @@ from botocore.config import Config
 
 
 LOGGER = logging.getLogger(__name__)
-LOGGER.setLevel(logging.INFO)
+LOGGER.setLevel(
+    getattr(
+        logging,
+        os.environ.get("LOG_LEVEL", "INFO").upper(),
+        logging.INFO,
+    )
+)
+OWNER_PATTERN = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+)
+REPO_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+_RUNTIME_CLIENT = None
 
 
 class RequestError(Exception):
@@ -34,6 +46,8 @@ PR 번호: {pr_number}
 
 
 def validate_job(event):
+    if not isinstance(event, dict):
+        raise RequestError("Review job must be a JSON object")
     missing = [
         name
         for name in ("owner", "repo", "pr_number")
@@ -49,15 +63,37 @@ def validate_job(event):
         raise RequestError("pr_number must be an integer") from exc
     if pr_number <= 0:
         raise RequestError("pr_number must be positive")
-    return str(event["owner"]), str(event["repo"]), pr_number
+    owner = str(event["owner"])
+    repo = str(event["repo"])
+    if not OWNER_PATTERN.fullmatch(owner):
+        raise RequestError("owner must be a valid GitHub account name")
+    if not REPO_PATTERN.fullmatch(repo):
+        raise RequestError("repo must be a valid GitHub repository name")
+    return owner, repo, pr_number
 
 
 def collect_completion(events):
     chunks = []
     for item in events:
-        if "chunk" in item:
-            chunks.append(item["chunk"]["bytes"].decode("utf-8"))
+        chunk = item.get("chunk")
+        value = chunk.get("bytes") if isinstance(chunk, dict) else None
+        if isinstance(value, bytes):
+            chunks.append(value.decode("utf-8"))
     return "".join(chunks)
+
+
+def get_runtime_client():
+    global _RUNTIME_CLIENT
+    if _RUNTIME_CLIENT is None:
+        _RUNTIME_CLIENT = boto3.client(
+            "bedrock-agent-runtime",
+            config=Config(
+                connect_timeout=10,
+                read_timeout=280,
+                retries={"max_attempts": 3, "mode": "standard"},
+            ),
+        )
+    return _RUNTIME_CLIENT
 
 
 def handler(event, context):
@@ -67,27 +103,28 @@ def handler(event, context):
         raise RequestError("AGENT_ID and ALIAS_ID must be configured")
 
     owner, repo, pr_number = validate_job(event)
-    runtime = boto3.client(
-        "bedrock-agent-runtime",
-        config=Config(
-            connect_timeout=10,
-            read_timeout=280,
-            retries={"max_attempts": 3, "mode": "standard"},
-        ),
-    )
-    response = runtime.invoke_agent(
-        agentId=agent_id,
-        agentAliasId=alias_id,
-        sessionId=event.get("session_id") or str(uuid.uuid4()),
-        inputText=build_review_prompt(
+    try:
+        response = get_runtime_client().invoke_agent(
+            agentId=agent_id,
+            agentAliasId=alias_id,
+            sessionId=event.get("session_id") or str(uuid.uuid4()),
+            inputText=build_review_prompt(
+                owner,
+                repo,
+                pr_number,
+                bool(event.get("notify_slack", True)),
+            ),
+            enableTrace=False,
+        )
+        result = collect_completion(response.get("completion", []))
+    except Exception:
+        LOGGER.exception(
+            "CodeBuddy review failed repo=%s/%s pr=%s",
             owner,
             repo,
             pr_number,
-            bool(event.get("notify_slack", True)),
-        ),
-        enableTrace=False,
-    )
-    result = collect_completion(response["completion"])
+        )
+        raise
     LOGGER.info(
         "CodeBuddy review completed repo=%s/%s pr=%s source=%s",
         owner,
