@@ -4,6 +4,7 @@ from unittest.mock import patch
 from botocore.exceptions import NoCredentialsError
 
 from src.setup_agent import (
+    build_agent_instruction,
     build_role_policies,
     find_named_resource,
     list_all,
@@ -54,6 +55,20 @@ class BuildPoliciesTests(unittest.TestCase):
             "bedrock:Retrieve",
             statements["AgentKnowledgeBaseQuery"]["Action"],
         )
+
+
+class AgentInstructionTests(unittest.TestCase):
+    def test_build_agent_instruction_adds_github_tool_rules_once(self):
+        instruction = build_agent_instruction(include_github_tool=True)
+
+        self.assertEqual(instruction.count("## GitHub PR 도구"), 1)
+        self.assertIn("get_github_pr", instruction)
+        self.assertIn("owner, repo, pr_number", instruction)
+
+    def test_build_agent_instruction_omits_tool_rules_by_default(self):
+        instruction = build_agent_instruction()
+
+        self.assertNotIn("## GitHub PR 도구", instruction)
 
 
 class ResourceSelectionTests(unittest.TestCase):
