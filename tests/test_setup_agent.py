@@ -70,6 +70,14 @@ class AgentInstructionTests(unittest.TestCase):
 
         self.assertNotIn("## GitHub PR 도구", instruction)
 
+    def test_build_agent_instruction_adds_codebuddy_tool_rules_once(self):
+        instruction = build_agent_instruction(include_codebuddy_tools=True)
+
+        self.assertEqual(instruction.count("## CodeBuddy 통합 Tool"), 1)
+        self.assertIn("post_pr_comment", instruction)
+        self.assertIn("send_slack_message", instruction)
+        self.assertIn("실제 GitHub 댓글", instruction)
+
 
 class ResourceSelectionTests(unittest.TestCase):
     def test_find_named_resource_returns_matching_id(self):
