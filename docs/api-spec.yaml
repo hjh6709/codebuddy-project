@@ -1,0 +1,338 @@
+openapi: 3.0.3
+info:
+  title: CodeBuddy Review API
+  version: 1.0.0
+  description: |
+    AWS Bedrock Agent가 GitHub Pull Request를 비동기로 리뷰하도록 요청하는 API입니다.
+    수동 요청은 API Key로 보호하며, GitHub Webhook은 Secrets Manager에 저장된
+    Secret을 사용해 HMAC-SHA256 서명을 검증합니다.
+
+servers:
+  - url: https://{apiId}.execute-api.{region}.amazonaws.com/prod
+    description: AWS API Gateway production stage
+    variables:
+      apiId:
+        default: abc123def4
+        description: 배포된 API Gateway REST API ID
+      region:
+        default: ap-northeast-2
+        description: AWS 리전
+
+tags:
+  - name: Review
+    description: API Key를 사용하는 수동 PR 리뷰 요청
+  - name: GitHub Webhook
+    description: GitHub Pull Request 이벤트 기반 자동 리뷰
+
+paths:
+  /review:
+    post:
+      tags:
+        - Review
+      summary: Pull Request 리뷰 시작
+      description: |
+        GitHub Pull Request URL을 검증한 후 Review Worker Lambda를 비동기로 호출합니다.
+        응답은 리뷰 완료가 아니라 작업 접수를 의미합니다.
+      operationId: startPullRequestReview
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
+            examples:
+              withSlack:
+                summary: Slack 알림을 포함한 리뷰 요청
+                value:
+                  pr_url: https://github.com/owner/repository/pull/1
+                  notify_slack: true
+              withoutSlack:
+                summary: Slack 알림을 생략한 리뷰 요청
+                value:
+                  pr_url: https://github.com/owner/repository/pull/2
+                  notify_slack: false
+      responses:
+        '202':
+          description: 리뷰 작업 접수 완료
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessingResponse'
+              example:
+                message: CodeBuddy review started
+                status: processing
+                repository: owner/repository
+                pr_number: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: API Key가 없거나 유효하지 않음
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayErrorResponse'
+              example:
+                message: Forbidden
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /webhook/github:
+    post:
+      tags:
+        - GitHub Webhook
+      summary: GitHub Webhook 이벤트 처리
+      description: |
+        `X-Hub-Signature-256` 헤더의 HMAC-SHA256 서명을 검증합니다.
+        `ping` 이벤트에는 pong을 반환하고, `pull_request` 이벤트 중
+        `opened`, `reopened`, `synchronize` action에서 자동 리뷰를 시작합니다.
+        그 밖의 이벤트와 action은 정상적으로 수신한 뒤 무시합니다.
+      operationId: handleGitHubWebhook
+      security:
+        - GitHubWebhookSignature: []
+      parameters:
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          description: GitHub 이벤트 이름 (`ping` 또는 `pull_request`)
+          schema:
+            type: string
+            enum:
+              - ping
+              - pull_request
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          description: 원본 요청 본문을 GitHub Webhook Secret으로 서명한 HMAC-SHA256 값
+          schema:
+            type: string
+            pattern: '^sha256=[0-9a-f]{64}$'
+          example: sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GitHubWebhookPayload'
+            example:
+              action: opened
+              repository:
+                owner:
+                  login: owner
+                name: repository
+              pull_request:
+                number: 1
+      responses:
+        '200':
+          description: GitHub ping 확인 완료
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+              example:
+                message: pong
+        '202':
+          description: 리뷰 작업 접수 또는 지원하지 않는 이벤트 무시
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ProcessingResponse'
+                  - $ref: '#/components/schemas/IgnoredResponse'
+              examples:
+                processing:
+                  value:
+                    message: CodeBuddy review started
+                    status: processing
+                    repository: owner/repository
+                    pr_number: 1
+                ignored:
+                  value:
+                    status: ignored
+                    action: closed
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: GitHub Webhook 서명이 유효하지 않음
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid GitHub webhook signature
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: API Gateway Usage Plan에 연결된 API Key
+    GitHubWebhookSignature:
+      type: apiKey
+      in: header
+      name: X-Hub-Signature-256
+      description: |
+        GitHub이 전송한 HMAC-SHA256 서명입니다. 서버는 Secrets Manager의
+        Webhook Secret으로 서명을 다시 계산하고 상수 시간 비교를 수행합니다.
+
+  schemas:
+    ReviewRequest:
+      type: object
+      required:
+        - pr_url
+      additionalProperties: true
+      properties:
+        pr_url:
+          type: string
+          format: uri
+          pattern: '^https://(www\.)?github\.com/[^/]+/[^/]+/pull/[1-9][0-9]*$'
+          description: 공개 또는 접근 가능한 GitHub Pull Request URL
+          example: https://github.com/owner/repository/pull/1
+        notify_slack:
+          type: boolean
+          default: true
+          description: 리뷰 완료 후 Slack 알림 전송 여부
+
+    ProcessingResponse:
+      type: object
+      required:
+        - message
+        - status
+        - repository
+        - pr_number
+      properties:
+        message:
+          type: string
+          enum:
+            - CodeBuddy review started
+        status:
+          type: string
+          enum:
+            - processing
+        repository:
+          type: string
+          example: owner/repository
+        pr_number:
+          type: integer
+          minimum: 1
+          example: 1
+
+    PingResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          enum:
+            - pong
+
+    IgnoredResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - ignored
+        action:
+          nullable: true
+          type: string
+          description: 무시된 pull_request action
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: Request body must be valid JSON
+
+    GatewayErrorResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          example: Forbidden
+
+    GitHubWebhookPayload:
+      type: object
+      additionalProperties: true
+      properties:
+        action:
+          type: string
+          description: |
+            자동 리뷰 지원 action: opened, reopened, synchronize.
+            다른 action은 202 응답 후 무시됩니다.
+          example: opened
+        repository:
+          type: object
+          properties:
+            owner:
+              type: object
+              properties:
+                login:
+                  type: string
+            name:
+              type: string
+        pull_request:
+          type: object
+          properties:
+            number:
+              type: integer
+              minimum: 1
+
+  responses:
+    BadRequest:
+      description: 요청 본문, PR URL 또는 Webhook payload가 유효하지 않음
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Missing pr_url
+    TooManyRequests:
+      description: API Gateway throttling 한도 초과
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GatewayErrorResponse'
+          example:
+            message: Too Many Requests
+    InternalServerError:
+      description: 서버 설정 오류 또는 예상하지 못한 내부 오류
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Internal server error
+    ServiceUnavailable:
+      description: Worker 호출 또는 Webhook Secret 조회를 일시적으로 수행할 수 없음
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            worker:
+              value:
+                error: Worker dispatch failed, please retry
+            webhookSecret:
+              value:
+                error: Webhook verification is temporarily unavailable
