@@ -6,10 +6,12 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from src import setup_serverless
-from src import setup_serverless
 from src.setup_serverless import (
+    build_github_webhook_payload,
     build_lambda_zip,
     build_stack_parameters,
+    configure_github_webhook,
+    ensure_github_webhook,
     load_template,
     save_serverless_state,
     stack_exists,
@@ -251,19 +253,8 @@ class StackStateTests(unittest.TestCase):
 
 
 class GitHubWebhookConfigurationTests(unittest.TestCase):
-    def setUp(self):
-        self.assertTrue(
-            hasattr(setup_serverless, "build_github_webhook_payload")
-        )
-        self.assertTrue(
-            hasattr(setup_serverless, "ensure_github_webhook")
-        )
-        self.assertTrue(
-            hasattr(setup_serverless, "configure_github_webhook")
-        )
-
     def test_build_github_webhook_payload_uses_hmac_secret(self):
-        payload = setup_serverless.build_github_webhook_payload(
+        payload = build_github_webhook_payload(
             "https://example.com/prod/webhook/github",
             "webhook-secret",
         )
@@ -287,7 +278,7 @@ class GitHubWebhookConfigurationTests(unittest.TestCase):
             calls.append((method, path, payload))
             return [] if method == "GET" else {"id": 7}
 
-        hook_id = setup_serverless.ensure_github_webhook(
+        hook_id = ensure_github_webhook(
             request_json,
             "hjh6709",
             "codebuddy-project",
@@ -320,7 +311,7 @@ class GitHubWebhookConfigurationTests(unittest.TestCase):
                 ]
             return {"id": 9}
 
-        hook_id = setup_serverless.ensure_github_webhook(
+        hook_id = ensure_github_webhook(
             request_json,
             "hjh6709",
             "codebuddy-project",
@@ -348,7 +339,7 @@ class GitHubWebhookConfigurationTests(unittest.TestCase):
             calls.append((method, path, payload))
             return [] if method == "GET" else {"id": 11}
 
-        hook_id = setup_serverless.configure_github_webhook(
+        hook_id = configure_github_webhook(
             secrets_client,
             request_json,
             "hjh6709/codebuddy-project",
@@ -373,7 +364,7 @@ class GitHubWebhookConfigurationTests(unittest.TestCase):
 
     def test_configure_github_webhook_rejects_invalid_repository(self):
         with self.assertRaisesRegex(ValueError, "owner/repository"):
-            setup_serverless.configure_github_webhook(
+            configure_github_webhook(
                 object(),
                 lambda *args: None,
                 "invalid-repository",

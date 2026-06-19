@@ -337,6 +337,55 @@ class GitHubWebhookTests(unittest.TestCase):
 
         self.assertEqual(response["statusCode"], 401)
 
+    def test_webhook_decodes_request_body_once(self):
+        event = self.build_event("ping", {"zen": "Keep it simple."})
+
+        with (
+            patch(
+                "codebuddy_orchestrator.get_webhook_secret",
+                return_value="webhook-secret",
+            ),
+            patch(
+                "codebuddy_orchestrator.decode_body",
+                wraps=codebuddy_orchestrator.decode_body,
+            ) as decode_body,
+        ):
+            response = handler(event, None)
+
+        self.assertEqual(response["statusCode"], 200)
+        self.assertEqual(decode_body.call_count, 1)
+
+    def test_webhook_returns_503_when_secret_store_is_unavailable(self):
+        class FailingSecretsClient:
+            def get_secret_value(self, **kwargs):
+                raise ClientError(
+                    {
+                        "Error": {
+                            "Code": "ServiceUnavailableException",
+                            "Message": "temporary failure",
+                        }
+                    },
+                    "GetSecretValue",
+                )
+
+        event = self.build_event("ping", {"zen": "Keep it simple."})
+        codebuddy_orchestrator._WEBHOOK_SECRET = None
+
+        with (
+            patch(
+                "codebuddy_orchestrator.get_secrets_client",
+                return_value=FailingSecretsClient(),
+            ),
+            patch.dict(
+                os.environ,
+                {"WEBHOOK_SECRET_ARN": "arn:secret"},
+                clear=True,
+            ),
+        ):
+            response = handler(event, None)
+
+        self.assertEqual(response["statusCode"], 503)
+
     def test_webhook_ping_returns_pong_without_dispatch(self):
         event = self.build_event("ping", {"zen": "Keep it simple."})
 

@@ -63,8 +63,12 @@ def decode_body(event):
 
 
 def parse_body(event):
+    return parse_body_bytes(decode_body(event))
+
+
+def parse_body_bytes(raw):
     try:
-        body = json.loads(decode_body(event).decode("utf-8"))
+        body = json.loads(raw.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise RequestError(400, "Request body must be valid JSON") from exc
     if not isinstance(body, dict):
@@ -112,7 +116,19 @@ def get_webhook_secret():
     secret_arn = os.environ.get("WEBHOOK_SECRET_ARN")
     if not secret_arn:
         raise RequestError(500, "WEBHOOK_SECRET_ARN must be configured")
-    response = get_secrets_client().get_secret_value(SecretId=secret_arn)
+    try:
+        response = get_secrets_client().get_secret_value(
+            SecretId=secret_arn
+        )
+    except (BotoCoreError, ClientError) as exc:
+        LOGGER.error(
+            "Webhook secret lookup failed: %s",
+            type(exc).__name__,
+        )
+        raise RequestError(
+            503,
+            "Webhook verification is temporarily unavailable",
+        ) from exc
     secret = response.get("SecretString")
     if not secret:
         raise RequestError(500, "Webhook secret is unavailable")
@@ -175,23 +191,25 @@ def get_header(event, name):
     return None
 
 
-def verify_github_signature(event):
+def verify_github_signature(event, raw_body):
     signature = str(
         get_header(event, "X-Hub-Signature-256") or ""
     )
     expected = "sha256=" + hmac.new(
         get_webhook_secret().encode("utf-8"),
-        decode_body(event),
+        raw_body,
         hashlib.sha256,
     ).hexdigest()
     if not hmac.compare_digest(signature, expected):
+        LOGGER.warning("Rejected GitHub webhook with invalid signature")
         raise RequestError(401, "Invalid GitHub webhook signature")
 
 
 def handle_github_webhook(event):
-    verify_github_signature(event)
+    raw_body = decode_body(event)
+    verify_github_signature(event, raw_body)
     event_name = str(get_header(event, "X-GitHub-Event") or "")
-    body = parse_body(event)
+    body = parse_body_bytes(raw_body)
     if event_name == "ping":
         return respond(200, {"message": "pong"})
     if event_name != "pull_request":
