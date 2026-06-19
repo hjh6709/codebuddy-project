@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from typing import Any
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 
 try:
     from src.agent_config import AgentConfig, load_config, load_state
@@ -116,8 +116,14 @@ def main() -> None:
             session_id=args.session_id,
             enable_trace=args.trace,
         )
+    except NoCredentialsError as exc:
+        raise SystemExit(
+            "❌ AWS 자격 증명을 확인하세요. aws configure 또는 AWS_PROFILE 설정이 필요합니다."
+        ) from exc
     except (ClientError, FileNotFoundError, ValueError) as exc:
         raise SystemExit(f"❌ Agent 호출 실패: {exc}") from exc
+    except BotoCoreError as exc:
+        raise SystemExit(f"❌ AWS SDK 연결 또는 설정 오류: {exc}") from exc
 
     print("🤖 CodeBuddy Agent 응답")
     print(text)

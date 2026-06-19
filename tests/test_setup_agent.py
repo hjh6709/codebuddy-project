@@ -1,9 +1,13 @@
 import unittest
+from unittest.mock import patch
+
+from botocore.exceptions import NoCredentialsError
 
 from src.setup_agent import (
     build_role_policies,
     find_named_resource,
     list_all,
+    main,
     wait_for_status,
 )
 
@@ -138,6 +142,19 @@ class WaitForStatusTests(unittest.TestCase):
                 timeout=0,
                 interval=0,
             )
+
+
+class MainErrorHandlingTests(unittest.TestCase):
+    def test_main_reports_missing_aws_credentials(self):
+        with patch(
+            "src.setup_agent.deploy_agent",
+            side_effect=NoCredentialsError(),
+        ):
+            with self.assertRaisesRegex(
+                SystemExit,
+                "AWS 자격 증명을 확인",
+            ):
+                main()
 
 
 if __name__ == "__main__":

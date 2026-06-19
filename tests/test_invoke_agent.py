@@ -1,6 +1,9 @@
 import unittest
+from unittest.mock import patch
 
-from src.invoke_agent import build_code_review_prompt, parse_completion
+from botocore.exceptions import NoCredentialsError
+
+from src.invoke_agent import build_code_review_prompt, main, parse_completion
 
 
 class CompletionParserTests(unittest.TestCase):
@@ -48,6 +51,27 @@ class PromptTests(unittest.TestCase):
         self.assertIn("```python", prompt)
         self.assertIn("def add(a, b)", prompt)
         self.assertIn("보안 취약점", prompt)
+
+
+class MainErrorHandlingTests(unittest.TestCase):
+    def test_main_reports_missing_aws_credentials(self):
+        with (
+            patch("src.invoke_agent.parse_args") as parse_args,
+            patch(
+                "src.invoke_agent.invoke",
+                side_effect=NoCredentialsError(),
+            ),
+        ):
+            parse_args.return_value.code_review = False
+            parse_args.return_value.prompt = "hello"
+            parse_args.return_value.session_id = None
+            parse_args.return_value.trace = False
+
+            with self.assertRaisesRegex(
+                SystemExit,
+                "AWS 자격 증명을 확인",
+            ):
+                main()
 
 
 if __name__ == "__main__":

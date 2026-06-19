@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 
 try:
     from src.agent_config import AgentConfig, AgentState, load_config, save_state
@@ -378,12 +378,18 @@ def deploy_agent(config: AgentConfig | None = None) -> AgentState:
 def main() -> None:
     try:
         deploy_agent()
+    except NoCredentialsError as exc:
+        raise SystemExit(
+            "❌ AWS 자격 증명을 확인하세요. aws configure 또는 AWS_PROFILE 설정이 필요합니다."
+        ) from exc
     except ClientError as exc:
         error = exc.response.get("Error", {})
         raise SystemExit(
             f"❌ AWS 오류 [{error.get('Code', 'Unknown')}]: "
             f"{error.get('Message', str(exc))}"
         ) from exc
+    except BotoCoreError as exc:
+        raise SystemExit(f"❌ AWS SDK 연결 또는 설정 오류: {exc}") from exc
     except (RuntimeError, TimeoutError) as exc:
         raise SystemExit(f"❌ 배포 실패: {exc}") from exc
 
