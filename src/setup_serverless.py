@@ -68,8 +68,6 @@ def save_serverless_state(path: Path, outputs: dict[str, str]) -> None:
         "review_api_url": outputs["ReviewApiUrl"],
         "api_key_id": outputs["ApiKeyId"],
     }
-    if outputs.get("api_key_value"):
-        state["api_key_value"] = outputs["api_key_value"]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
@@ -107,12 +105,24 @@ def upload_artifact(s3_client: Any, bucket: str, name: str, body: bytes) -> str:
 
 def stack_exists(cfn_client: Any, stack_name: str) -> bool:
     try:
-        cfn_client.describe_stacks(StackName=stack_name)
-        return True
+        response = cfn_client.describe_stacks(StackName=stack_name)
     except ClientError as exc:
         if "does not exist" in str(exc):
             return False
         raise
+    status = response["Stacks"][0]["StackStatus"]
+    failed_states = {
+        "CREATE_FAILED",
+        "ROLLBACK_COMPLETE",
+        "ROLLBACK_FAILED",
+        "DELETE_FAILED",
+        "UPDATE_ROLLBACK_FAILED",
+    }
+    if status in failed_states:
+        raise RuntimeError(
+            f"CloudFormation stack requires manual recovery: {status}"
+        )
+    return True
 
 
 def wait_for_stack(cfn_client: Any, stack_name: str, created: bool) -> None:
@@ -132,7 +142,6 @@ def deploy_serverless() -> dict[str, str]:
     sts_client = session.client("sts")
     s3_client = session.client("s3")
     cfn_client = session.client("cloudformation")
-    api_client = session.client("apigateway")
 
     account_id = sts_client.get_caller_identity()["Account"]
     bucket = f"codebuddy-artifacts-{account_id}-{config.region}"
@@ -183,11 +192,6 @@ def deploy_serverless() -> dict[str, str]:
         item["OutputKey"]: item["OutputValue"]
         for item in stack.get("Outputs", [])
     }
-    key = api_client.get_api_key(
-        apiKey=outputs["ApiKeyId"],
-        includeValue=True,
-    )
-    outputs["api_key_value"] = key["value"]
     save_serverless_state(STATE_PATH, outputs)
     print(f"✅ CodeBuddy 서버리스 API 배포: {outputs['ReviewApiUrl']}")
     print(f"💾 API 상태 저장: {STATE_PATH}")
@@ -204,6 +208,7 @@ def main() -> None:
         ClientError,
         FileNotFoundError,
         KeyError,
+        RuntimeError,
         ValueError,
     ) as exc:
         raise SystemExit(f"❌ 서버리스 API 배포 실패: {exc}") from exc

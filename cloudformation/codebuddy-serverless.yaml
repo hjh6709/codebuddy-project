@@ -6,7 +6,13 @@
     "OrchestratorCodeKey": {"Type": "String"},
     "WorkerCodeKey": {"Type": "String"},
     "AgentId": {"Type": "String"},
-    "AliasId": {"Type": "String"}
+    "AliasId": {"Type": "String"},
+    "AllowedOrigin": {
+      "Type": "String",
+      "Default": "https://github.com",
+      "AllowedPattern": "^https://[^*]+$",
+      "ConstraintDescription": "Use one explicit HTTPS origin without wildcards."
+    }
   },
   "Resources": {
     "WorkerRole": {
@@ -103,7 +109,8 @@
         },
         "Environment": {
           "Variables": {
-            "WORKER_FUNCTION_NAME": {"Ref": "ReviewWorkerFunction"}
+            "WORKER_FUNCTION_NAME": {"Ref": "ReviewWorkerFunction"},
+            "ALLOWED_ORIGIN": {"Ref": "AllowedOrigin"}
           }
         }
       }

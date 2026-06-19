@@ -11,6 +11,7 @@ from src.setup_serverless import (
     build_stack_parameters,
     load_template,
     save_serverless_state,
+    stack_exists,
 )
 
 
@@ -106,6 +107,23 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(usage_plan["Throttle"]["RateLimit"], 2)
         self.assertEqual(usage_plan["Quota"]["Limit"], 1000)
 
+    def test_orchestrator_uses_explicit_non_wildcard_cors_origin(self):
+        template = load_template()
+        self.assertIn("AllowedOrigin", template["Parameters"])
+        allowed_origin = template["Parameters"].get(
+            "AllowedOrigin",
+            {"Default": "*"},
+        )
+        environment = template["Resources"]["OrchestratorFunction"][
+            "Properties"
+        ]["Environment"]["Variables"]
+
+        self.assertNotEqual(allowed_origin["Default"], "*")
+        self.assertEqual(
+            environment["ALLOWED_ORIGIN"],
+            {"Ref": "AllowedOrigin"},
+        )
+
 
 class ParameterTests(unittest.TestCase):
     def test_build_stack_parameters_maps_artifacts_and_agent(self):
@@ -145,6 +163,7 @@ class StateTests(unittest.TestCase):
                 {
                     "ReviewApiUrl": "https://example.com/review",
                     "ApiKeyId": "key-1",
+                    "api_key_value": "must-not-be-written",
                 },
             )
 
@@ -155,6 +174,20 @@ class StateTests(unittest.TestCase):
                     "api_key_id": "key-1",
                 },
             )
+
+
+class StackStateTests(unittest.TestCase):
+    def test_stack_exists_rejects_failed_stack_state(self):
+        class CloudFormationClient:
+            def describe_stacks(self, **kwargs):
+                return {
+                    "Stacks": [
+                        {"StackStatus": "UPDATE_ROLLBACK_FAILED"}
+                    ]
+                }
+
+        with self.assertRaisesRegex(RuntimeError, "ROLLBACK_FAILED"):
+            stack_exists(CloudFormationClient(), "CodeBuddyServerless")
 
 
 if __name__ == "__main__":
