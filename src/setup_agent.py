@@ -55,8 +55,29 @@ GITHUB_TOOL_INSTRUCTION = """
 - 도구 결과의 files_truncated 또는 patches_truncated가 true면 일부 내용만 조회됐다고 알립니다.
 """
 
+CODEBUDDY_TOOLS_INSTRUCTION = """
 
-def build_agent_instruction(include_github_tool: bool = False) -> str:
+## CodeBuddy 통합 Tool
+- get_github_pr: 공개 GitHub Pull Request의 상세 정보와 변경 파일을 조회합니다.
+- post_pr_comment: 실제 GitHub 댓글을 Pull Request에 등록합니다.
+- send_slack_message: 실제 Slack 메시지를 Incoming Webhook으로 전송합니다.
+
+## Tool 사용 규칙
+- 사용자가 PR 조회, PR 리뷰, diff 요약을 요청하면 get_github_pr를 호출합니다.
+- 사용자가 PR에 결과를 남기라고 명시하면 post_pr_comment를 호출합니다.
+- 사용자가 Slack 알림을 요청하면 send_slack_message를 호출합니다.
+- 실제 GitHub 댓글 또는 Slack 메시지를 보내기 전에 owner, repo, pr_number, comment 또는 message 같은 필수 파라미터가 모두 있는지 확인합니다.
+- 필수 파라미터가 빠졌다면 추측하지 말고 사용자에게 필요한 값을 질문합니다.
+- PR 조회 결과의 files_truncated 또는 patches_truncated가 true면 검토 범위가 제한됐다고 명시하고 전체 리뷰라고 단정하지 않습니다.
+"""
+
+
+def build_agent_instruction(
+    include_github_tool: bool = False,
+    include_codebuddy_tools: bool = False,
+) -> str:
+    if include_codebuddy_tools:
+        return BASE_AGENT_INSTRUCTION + CODEBUDDY_TOOLS_INSTRUCTION
     if include_github_tool:
         return BASE_AGENT_INSTRUCTION + GITHUB_TOOL_INSTRUCTION
     return BASE_AGENT_INSTRUCTION
