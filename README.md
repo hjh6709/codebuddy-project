@@ -38,12 +38,14 @@ codebuddy-project/
 │   ├── full_project_review.py
 │   ├── agent_config.py / setup_agent.py / invoke_agent.py
 │   ├── github_tool_schema.py / setup_github_tool.py
+│   ├── codebuddy_tool_schema.py / setup_codebuddy_tools.py
 │   ├── project_review_report.md
 │   ├── pep8.txt / owasp-top10.txt / airbnb-style.txt
 │   └── javascript_airbnb.txt / java_google.txt / golang_effective.txt
 ├── lambda/
-│   └── github_pr_tool.py     # 공개 GitHub PR 조회 Lambda
-├── tests/                    # 5장 Agent 자동화 단위 테스트
+│   ├── github_pr_tool.py     # 공개 GitHub PR 조회 Lambda
+│   └── codebuddy_tools.py    # 7/8장 통합 Tool Lambda
+├── tests/                    # Agent/Tool 자동화 단위 테스트
 ```
 
 ---
@@ -312,6 +314,81 @@ Manager를 추가해야 합니다.
 
 ---
 
+## 📂 [7장] Agent Tool 확장: PR 댓글과 Slack 알림
+
+6장의 공개 PR 조회 Tool을 확장하여 Agent가 실제 워크플로우를 수행하도록 만들었습니다.
+Colab 셀 중심의 PDF 예제를 프로젝트 구조에 맞춰 `.py` 파일로 재구성했습니다.
+
+### 생성되는 AWS 리소스
+
+| 구분 | 값 |
+|---|---|
+| Lambda | `codebuddy-all-tools-executor` |
+| Lambda IAM 역할 | `CodeBuddy-Lambda-Role` |
+| Action Group | `CodeBuddyTools` |
+| GitHub 댓글 Tool | `post_pr_comment` |
+| Slack 알림 Tool | `send_slack_message` |
+
+통합 Action Group을 활성화할 때 6장의 `GitHubPRTools`는 중복 Tool 선택을 막기 위해
+자동으로 비활성화합니다.
+
+### 실제 외부 전송 환경변수
+
+7장은 실제 GitHub 댓글과 Slack 메시지를 전송합니다. 토큰과 Webhook URL은 코드에
+저장하지 않고 배포 시 환경변수로만 주입합니다.
+
+| 환경변수 | 설명 |
+|---|---|
+| `GITHUB_TOKEN` | PR 댓글 작성 권한이 있는 GitHub 토큰 |
+| `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL |
+| `CODEBUDDY_TOOL_MODEL_ID` | 8장 생성 Tool에서 사용할 모델 ID, 기본값은 Sonnet 4.6 |
+
+```bash
+export GITHUB_TOKEN="..."
+export SLACK_WEBHOOK_URL="..."
+
+python src/setup_agent.py
+python src/setup_codebuddy_tools.py
+```
+
+### 7장 시연 프롬프트
+
+```bash
+python src/invoke_agent.py --trace \
+  --prompt "hjh6709/codebuddy-project PR #1을 리뷰하고 결과를 PR 댓글로 남긴 뒤 Slack에도 알려줘"
+```
+
+실제 댓글이 남으므로 본인이 쓰기 권한을 가진 테스트 PR에서만 실행하세요.
+
+---
+
+## 📂 [8장] 복잡한 코드 분석 Tool 구현
+
+복잡도 분석, 단위 테스트 생성, 리팩토링 제안 Tool을 같은 통합 Lambda에 추가했습니다.
+
+### 추가 Tool
+
+| Tool | 역할 |
+|---|---|
+| `analyze_complexity` | Python AST 기반 함수별 복잡도 분석 |
+| `generate_unit_test` | Bedrock Runtime으로 pytest 단위 테스트 생성 |
+| `suggest_refactor` | Bedrock Runtime으로 리팩토링 제안 생성 |
+
+복잡도 등급은 A(1-5), B(6-10), C(11-20), D(21+)로 정리하며, Agent
+Instructions에 Markdown 표 형식으로 출력하도록 지시했습니다.
+
+### 8장 시연 프롬프트
+
+```bash
+python src/invoke_agent.py --trace \
+  --prompt "다음 Python 코드의 복잡도를 분석하고, 리팩토링 제안과 pytest 테스트도 만들어줘: def process(items): ..."
+```
+
+복합 시나리오에서는 Agent가 PR 조회 → 복잡도 분석 → 리팩토링 제안 → 테스트 생성 →
+PR 댓글 등록 → Slack 알림 순서로 여러 Tool을 조합할 수 있습니다.
+
+---
+
 ## 🔄 전체 아키텍처 흐름
 
 ### [사전 작업] Knowledge Base 구축
@@ -381,11 +458,31 @@ GitHub Public REST API
 Agent의 자연어 요약
 ```
 
+### [7/8장] 통합 Agent Tool 워크플로우
+
+```text
+사용자: "PR을 리뷰하고 댓글과 Slack으로 알려줘"
+        ↓
+CodeBuddy-Reviewer Agent
+        ↓ OpenAPI operation 선택
+CodeBuddyTools Action Group
+        ↓
+codebuddy-all-tools-executor Lambda
+        ├── get_github_pr
+        ├── analyze_complexity
+        ├── generate_unit_test
+        ├── suggest_refactor
+        ├── post_pr_comment
+        └── send_slack_message
+        ↓
+GitHub PR 댓글 + Slack 알림 + Agent 응답
+```
+
 ---
 
 ## 📋 실습 강의 자료
 
-본 프로젝트는 아래 6개 강의 PDF 실습 내용을 기반으로 작성되었습니다.
+본 프로젝트는 아래 8개 강의 PDF 실습 내용을 기반으로 작성되었습니다.
 
 | 챕터 | 강의명 |
 |---|---|
@@ -395,3 +492,5 @@ Agent의 자연어 요약
 | 4장 | RAG로 코드 스타일/보안 검사 구현 |
 | 5장 | Agents for Bedrock 개념 및 기본 생성 |
 | 6장 | Agent Tool Use 개념 및 첫 번째 Tool 구현 |
+| 7장 | Agent Tool 확장 |
+| 8장 | 복잡한 코드 분석 Tool 구현 |
