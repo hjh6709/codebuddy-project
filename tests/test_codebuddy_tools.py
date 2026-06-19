@@ -3,6 +3,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -155,6 +156,153 @@ class SlackTests(unittest.TestCase):
             calls[0][3],
             {"text": "리뷰가 완료되었습니다.", "channel": "#code-review"},
         )
+
+
+class ComplexityTests(unittest.TestCase):
+    def test_handler_reports_function_complexity_ranks(self):
+        code = """
+def simple(value):
+    return value
+
+def complex_func(items):
+    total = 0
+    for item in items:
+        if item > 0:
+            total += item
+        elif item == 0:
+            total += 1
+        else:
+            total -= item
+    return total
+"""
+        event = event_for("/complexity", "POST", {"code": code})
+
+        response = handler(event, None)
+
+        payload = json.loads(
+            response["response"]["responseBody"]["application/json"]["body"]
+        )
+        self.assertEqual(response["response"]["httpStatusCode"], 200)
+        self.assertEqual(payload["summary"]["total_functions"], 2)
+        details = {item["name"]: item for item in payload["details"]}
+        self.assertEqual(details["simple"]["complexity"], 1)
+        self.assertGreater(details["complex_func"]["complexity"], 3)
+
+    def test_except_handler_increases_complexity_once(self):
+        event = event_for(
+            "/complexity",
+            "POST",
+            {
+                "code": (
+                    "def load_value():\n"
+                    "    try:\n"
+                    "        return read_value()\n"
+                    "    except ValueError:\n"
+                    "        return None\n"
+                )
+            },
+        )
+
+        response = handler(event, None)
+        payload = json.loads(
+            response["response"]["responseBody"]["application/json"]["body"]
+        )
+
+        self.assertEqual(payload["details"][0]["complexity"], 2)
+
+    def test_nested_function_does_not_inflate_outer_complexity(self):
+        event = event_for(
+            "/complexity",
+            "POST",
+            {
+                "code": (
+                    "def outer():\n"
+                    "    def inner(value):\n"
+                    "        if value:\n"
+                    "            return 1\n"
+                    "        return 0\n"
+                    "    return inner(True)\n"
+                )
+            },
+        )
+
+        response = handler(event, None)
+        payload = json.loads(
+            response["response"]["responseBody"]["application/json"]["body"]
+        )
+        details = {item["name"]: item for item in payload["details"]}
+
+        self.assertEqual(details["outer"]["complexity"], 1)
+        self.assertEqual(details["inner"]["complexity"], 2)
+
+
+class BedrockGenerationTests(unittest.TestCase):
+    def test_handler_generates_pytest_unit_tests_with_bedrock(self):
+        event = event_for(
+            "/unittest",
+            "POST",
+            {
+                "code": "def add(a, b):\n    return a + b\n",
+                "function_name": "add",
+            },
+        )
+        calls = []
+
+        class BedrockClient:
+            def converse(self, **kwargs):
+                calls.append(kwargs)
+                return {
+                    "output": {
+                        "message": {
+                            "content": [
+                                {"text": "def test_add_returns_sum():\n    assert add(1, 2) == 3"}
+                            ]
+                        }
+                    }
+                }
+
+        fake_boto3 = SimpleNamespace(client=lambda *args, **kwargs: BedrockClient())
+        with patch("codebuddy_tools.boto3", fake_boto3, create=True):
+            response = handler(event, None)
+
+        payload = json.loads(
+            response["response"]["responseBody"]["application/json"]["body"]
+        )
+        self.assertEqual(response["response"]["httpStatusCode"], 200)
+        self.assertTrue(payload["success"])
+        self.assertIn("test_add_returns_sum", payload["test_code"])
+        self.assertIn("pytest", calls[0]["messages"][0]["content"][0]["text"])
+
+    def test_handler_suggests_refactor_with_focus(self):
+        event = event_for(
+            "/refactor",
+            "POST",
+            {
+                "code": "def total(items):\n    return sum(items)\n",
+                "focus": "readability",
+            },
+        )
+
+        class BedrockClient:
+            def converse(self, **kwargs):
+                return {
+                    "output": {
+                        "message": {
+                            "content": [{"text": "문제점 분석\n개선된 코드"}]
+                        }
+                    }
+                }
+
+        fake_boto3 = SimpleNamespace(client=lambda *args, **kwargs: BedrockClient())
+        with patch("codebuddy_tools.boto3", fake_boto3, create=True):
+            response = handler(event, None)
+
+        payload = json.loads(
+            response["response"]["responseBody"]["application/json"]["body"]
+        )
+        self.assertEqual(response["response"]["httpStatusCode"], 200)
+        self.assertEqual(payload["focus"], "readability")
+        self.assertIn("문제점 분석", payload["suggestion"])
 
 
 class ErrorMappingTests(unittest.TestCase):

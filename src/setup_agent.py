@@ -61,14 +61,20 @@ CODEBUDDY_TOOLS_INSTRUCTION = """
 - get_github_pr: 공개 GitHub Pull Request의 상세 정보와 변경 파일을 조회합니다.
 - post_pr_comment: 실제 GitHub 댓글을 Pull Request에 등록합니다.
 - send_slack_message: 실제 Slack 메시지를 Incoming Webhook으로 전송합니다.
+- analyze_complexity: Python 코드의 함수별 복잡도를 분석합니다.
+- generate_unit_test: Python 코드에 대한 pytest 단위 테스트를 생성합니다.
+- suggest_refactor: Python 코드의 리팩토링 제안을 생성합니다.
 
 ## Tool 사용 규칙
 - 사용자가 PR 조회, PR 리뷰, diff 요약을 요청하면 get_github_pr를 호출합니다.
 - 사용자가 PR에 결과를 남기라고 명시하면 post_pr_comment를 호출합니다.
 - 사용자가 Slack 알림을 요청하면 send_slack_message를 호출합니다.
+- 사용자가 복잡도, 테스트 생성, 리팩토링을 요청하면 각각 analyze_complexity, generate_unit_test, suggest_refactor를 호출합니다.
 - 실제 GitHub 댓글 또는 Slack 메시지를 보내기 전에 owner, repo, pr_number, comment 또는 message 같은 필수 파라미터가 모두 있는지 확인합니다.
 - 필수 파라미터가 빠졌다면 추측하지 말고 사용자에게 필요한 값을 질문합니다.
 - PR 조회 결과의 files_truncated 또는 patches_truncated가 true면 검토 범위가 제한됐다고 명시하고 전체 리뷰라고 단정하지 않습니다.
+- 복잡도 분석 결과는 Markdown 표로 정리합니다.
+- 생성된 테스트 코드나 리팩토링 제안을 PR 댓글로 남길 때는 읽기 쉬운 Markdown 코드 블록을 사용합니다.
 """
 
 

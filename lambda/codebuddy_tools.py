@@ -1,3 +1,4 @@
+import ast
 import json
 import logging
 import os
@@ -5,6 +6,8 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+import boto3
 
 
 LOGGER = logging.getLogger()
@@ -15,6 +18,12 @@ DEFAULT_ACTION_GROUP = "CodeBuddyTools"
 MAX_FILES = 20
 MAX_PATCH_CHARS = 4_000
 MAX_TOTAL_PATCH_CHARS = 30_000
+BEDROCK_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
+BEDROCK_MODEL_ID = os.environ.get(
+    "CODEBUDDY_TOOL_MODEL_ID",
+    "global.anthropic.claude-sonnet-4-6",
+)
+REFACTOR_FOCUS_VALUES = {"readability", "performance", "maintainability"}
 
 
 class RequestError(Exception):
@@ -100,6 +109,9 @@ def route_operation(event):
         ("GET", "/github/pr"): "get_github_pr",
         ("POST", "/github/pr/comment"): "post_pr_comment",
         ("POST", "/slack/message"): "send_slack_message",
+        ("POST", "/complexity"): "analyze_complexity",
+        ("POST", "/unittest"): "generate_unit_test",
+        ("POST", "/refactor"): "suggest_refactor",
     }
     operation = routes.get((method, path))
     if operation is None:
@@ -257,6 +269,190 @@ def send_slack_message(event):
     }
 
 
+def complexity_rank(complexity):
+    if complexity <= 5:
+        return "A"
+    if complexity <= 10:
+        return "B"
+    if complexity <= 20:
+        return "C"
+    return "D"
+
+
+def complexity_action(rank):
+    return {
+        "A": "양호",
+        "B": "보통, 필요 시 리팩토링 검토",
+        "C": "복잡, 리팩토링 고려",
+        "D": "매우 복잡, 즉시 리팩토링 권장",
+    }[rank]
+
+
+def cyclomatic_complexity(node):
+    complexity = 1
+    pending = list(ast.iter_child_nodes(node))
+    while pending:
+        child = pending.pop()
+        if isinstance(
+            child,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            continue
+        pending.extend(ast.iter_child_nodes(child))
+        if isinstance(
+            child,
+            (
+                ast.If,
+                ast.For,
+                ast.AsyncFor,
+                ast.While,
+                ast.IfExp,
+                ast.ExceptHandler,
+            ),
+        ):
+            complexity += 1
+        elif isinstance(child, ast.BoolOp):
+            complexity += max(1, len(child.values) - 1)
+    return complexity
+
+
+def analyze_complexity(code):
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        raise RequestError(400, f"Python 코드 구문을 분석할 수 없습니다: {exc}")
+
+    details = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            score = cyclomatic_complexity(node)
+            rank = complexity_rank(score)
+            details.append(
+                {
+                    "name": node.name,
+                    "lineno": node.lineno,
+                    "complexity": score,
+                    "rank": rank,
+                    "action": complexity_action(rank),
+                }
+            )
+
+    average = (
+        sum(item["complexity"] for item in details) / len(details)
+        if details
+        else 0
+    )
+    return {
+        "success": True,
+        "summary": {
+            "total_functions": len(details),
+            "average_complexity": round(average, 2),
+            "max_complexity": max(
+                (item["complexity"] for item in details),
+                default=0,
+            ),
+            "functions_above_threshold": [
+                item for item in details if item["complexity"] > 10
+            ],
+        },
+        "details": sorted(details, key=lambda item: item["lineno"]),
+    }
+
+
+def analyze_complexity_tool(event):
+    values = extract_parameters(event, ("code",))
+    return analyze_complexity(str(values["code"]))
+
+
+def bedrock_client():
+    return boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
+
+
+def converse_text(prompt, temperature, max_tokens):
+    response = bedrock_client().converse(
+        modelId=BEDROCK_MODEL_ID,
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        inferenceConfig={
+            "temperature": temperature,
+            "maxTokens": max_tokens,
+        },
+    )
+    return response["output"]["message"]["content"][0]["text"]
+
+
+def build_unit_test_prompt(code, function_name=None):
+    target = (
+        f"\n테스트 대상 함수명: {function_name}"
+        if function_name
+        else ""
+    )
+    return f"""당신은 테스트 엔지니어입니다. 다음 Python 코드에 대한 pytest 단위 테스트 코드를 작성해주세요.{target}
+
+함수 코드:
+```python
+{code}
+```
+
+요구사항:
+- 정상적인 입력에 대한 테스트를 포함하세요.
+- 경계값 테스트를 포함하세요. 예: 빈 리스트, 0, None 등.
+- 예외 상황 테스트를 포함하세요. 예: 잘못된 입력 타입 등.
+- pytest 스타일을 사용하세요. assert와 pytest.raises를 활용하세요.
+- 테스트 함수명은 test_<원본함수명>_<시나리오> 형식을 사용하세요.
+- 테스트 코드만 출력하세요. 설명 문장은 출력하지 마세요.
+"""
+
+
+def generate_unit_test(event):
+    values = extract_parameters(event, ("code",))
+    code = str(values["code"])
+    function_name = values.get("function_name")
+    prompt = build_unit_test_prompt(code, function_name)
+    test_code = converse_text(prompt, temperature=0.2, max_tokens=2_000)
+    return {
+        "success": True,
+        "test_code": test_code,
+    }
+
+
+def build_refactor_prompt(code, focus):
+    return f"""당신은 시니어 개발자입니다. 다음 Python 코드를 리팩토링하여 더 나은 구조를 제안해주세요.
+
+코드:
+```python
+{code}
+```
+
+리팩토링 목표: {focus}
+
+제안 형식:
+1. 문제점 분석
+2. 개선된 코드
+3. 변경 이유
+
+개선된 코드는 가능한 한 기존 동작을 유지해야 합니다.
+Markdown으로 읽기 쉽게 답변하세요.
+"""
+
+
+def suggest_refactor(event):
+    values = extract_parameters(event, ("code",))
+    code = str(values["code"])
+    focus = str(values.get("focus") or "maintainability")
+    if focus not in REFACTOR_FOCUS_VALUES:
+        raise RequestError(
+            400,
+            "focus는 readability, performance, maintainability 중 하나여야 합니다.",
+        )
+    prompt = build_refactor_prompt(code, focus)
+    suggestion = converse_text(prompt, temperature=0.3, max_tokens=3_000)
+    return {
+        "success": True,
+        "focus": focus,
+        "suggestion": suggestion,
+    }
+
+
 def map_http_error(error):
     headers = error.headers or {}
     remaining = headers.get("x-ratelimit-remaining")
@@ -289,6 +485,9 @@ def handler(event, context):
             "get_github_pr": get_github_pr,
             "post_pr_comment": post_pr_comment,
             "send_slack_message": send_slack_message,
+            "analyze_complexity": analyze_complexity_tool,
+            "generate_unit_test": generate_unit_test,
+            "suggest_refactor": suggest_refactor,
         }
         if operation not in handlers:
             raise RequestError(501, f"{operation} Tool은 아직 구현되지 않았습니다.")
