@@ -18,6 +18,7 @@ from codebuddy_tools import (  # noqa: E402
     build_response,
     extract_parameters,
     handler,
+    normalize_pr,
     route_operation,
 )
 
@@ -52,6 +53,41 @@ class ParameterTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RequestError, "repo, pr_number, comment"):
             extract_parameters(event, ("owner", "repo", "pr_number", "comment"))
+
+
+class PullRequestNormalizationTests(unittest.TestCase):
+    def test_preserves_large_patch_when_aggregate_fits_total_budget(self):
+        patch = "x" * 5_000
+
+        result = normalize_pr(
+            {"changed_files": 1},
+            [{"filename": "api-spec.yaml", "patch": patch}],
+            max_files=20,
+            max_patch_chars=1_000,
+            max_total_patch_chars=6_000,
+        )
+
+        self.assertEqual(result["files"][0]["patch"], patch)
+        self.assertFalse(result["patches_truncated"])
+
+    def test_truncates_patches_when_aggregate_exceeds_total_budget(self):
+        result = normalize_pr(
+            {"changed_files": 2},
+            [
+                {"filename": "first.py", "patch": "a" * 4_000},
+                {"filename": "second.py", "patch": "b" * 4_000},
+            ],
+            max_files=20,
+            max_patch_chars=3_000,
+            max_total_patch_chars=5_000,
+        )
+
+        total_patch_chars = sum(
+            len(item["patch"])
+            for item in result["files"]
+        )
+        self.assertEqual(total_patch_chars, 5_000)
+        self.assertTrue(result["patches_truncated"])
 
 
 class RoutingTests(unittest.TestCase):
