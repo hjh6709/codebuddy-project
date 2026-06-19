@@ -37,9 +37,12 @@ codebuddy-project/
 │   ├── test_rag.py
 │   ├── full_project_review.py
 │   ├── agent_config.py / setup_agent.py / invoke_agent.py
+│   ├── github_tool_schema.py / setup_github_tool.py
 │   ├── project_review_report.md
 │   ├── pep8.txt / owasp-top10.txt / airbnb-style.txt
 │   └── javascript_airbnb.txt / java_google.txt / golang_effective.txt
+├── lambda/
+│   └── github_pr_tool.py     # 공개 GitHub PR 조회 Lambda
 ├── tests/                    # 5장 Agent 자동화 단위 테스트
 ```
 
@@ -251,6 +254,64 @@ python -m unittest discover -s tests -v
 
 ---
 
+## 📂 [6장] Agent Tool Use 및 GitHub PR Tool
+
+Bedrock Agent가 외부 GitHub REST API를 직접 호출할 수 있도록 Lambda 기반 Action
+Group을 추가합니다. 이번 장은 공개 저장소 전용이라 GitHub 토큰을 저장하지 않습니다.
+
+### 생성되는 AWS 리소스
+
+| 구분 | 값 |
+|---|---|
+| Lambda | `codebuddy-github-pr` |
+| Lambda IAM 역할 | `CodeBuddy-Lambda-Role` |
+| Action Group | `GitHubPRTools` |
+| Tool operationId | `get_github_pr` |
+
+### `lambda/github_pr_tool.py`
+
+Python 표준 라이브러리로 공개 PR 상세 정보와 변경 파일·patch를 조회합니다. 외부
+패키지를 포함하지 않아 Lambda ZIP이 작고, GitHub 토큰도 필요하지 않습니다.
+
+응답에는 제목, 설명, 상태, 작성자, 추가·삭제 줄 수, 변경 파일과 patch가 포함됩니다.
+과도한 입력을 막기 위해 파일 20개, 파일별 patch 4,000자, 전체 patch 30,000자로
+제한합니다.
+
+### `src/github_tool_schema.py`
+
+Agent가 자연어 요청에서 `owner`, `repo`, `pr_number`를 추출하고 적절한 시점에
+Lambda를 호출하도록 OpenAPI 3.0 스키마를 정의합니다.
+
+### `src/setup_github_tool.py`
+
+Lambda 실행 역할, Lambda 함수, Bedrock 호출 권한, Action Group, Agent
+Instructions, Prepare와 Alias 갱신을 멱등적으로 자동화합니다.
+
+```bash
+# 새 checkout/worktree라면 5장 상태 파일부터 생성
+python src/setup_agent.py
+
+# Lambda와 Action Group 배포
+python src/setup_github_tool.py
+```
+
+### 공개 PR Tool 호출
+
+```bash
+python src/invoke_agent.py \
+  --prompt "octocat/Spoon-Knife PR #40222를 가져와 변경 내용을 설명해줘"
+
+python src/invoke_agent.py \
+  --trace \
+  --prompt "octocat/Spoon-Knife PR #40222를 가져와 변경 내용을 설명해줘"
+```
+
+인증되지 않은 GitHub 공개 REST API는 Lambda의 원본 IP 기준 시간당 60회로
+제한됩니다. 비공개 저장소가 필요해지면 GitHub App 또는 최소 권한 토큰과 Secrets
+Manager를 추가해야 합니다.
+
+---
+
 ## 🔄 전체 아키텍처 흐름
 
 ### [사전 작업] Knowledge Base 구축
@@ -304,11 +365,27 @@ CodeBuddy-Reviewer Agent
         근거 기반 코드 리뷰 응답
 ```
 
+### [6장] GitHub PR Tool
+
+```text
+사용자: "owner/repo PR #123을 가져와줘"
+        ↓
+CodeBuddy-Reviewer Agent
+        ↓ OpenAPI 파라미터 추출
+GitHubPRTools Action Group
+        ↓
+codebuddy-github-pr Lambda
+        ↓ HTTPS GET
+GitHub Public REST API
+        ↓ PR 메타데이터 + 변경 파일 + patch
+Agent의 자연어 요약
+```
+
 ---
 
 ## 📋 실습 강의 자료
 
-본 프로젝트는 아래 5개 강의 PDF 실습 내용을 기반으로 작성되었습니다.
+본 프로젝트는 아래 6개 강의 PDF 실습 내용을 기반으로 작성되었습니다.
 
 | 챕터 | 강의명 |
 |---|---|
@@ -317,3 +394,4 @@ CodeBuddy-Reviewer Agent
 | 3장 | RAG 이해 및 Knowledge Base 구축 |
 | 4장 | RAG로 코드 스타일/보안 검사 구현 |
 | 5장 | Agents for Bedrock 개념 및 기본 생성 |
+| 6장 | Agent Tool Use 개념 및 첫 번째 Tool 구현 |

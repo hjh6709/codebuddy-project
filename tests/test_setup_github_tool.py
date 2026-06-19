@@ -1,12 +1,16 @@
 import io
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 from zipfile import ZipFile
 
+from src.agent_config import AgentState, load_config
 from src.setup_github_tool import (
     build_lambda_trust_policy,
     build_lambda_zip,
     find_action_group,
+    update_agent_for_github_tool,
 )
 
 
@@ -52,6 +56,39 @@ class ActionGroupSelectionTests(unittest.TestCase):
 
     def test_find_action_group_returns_none_without_match(self):
         self.assertIsNone(find_action_group([], "GitHubPRTools"))
+
+
+class AgentUpdateTests(unittest.TestCase):
+    def test_update_accepts_prepared_or_not_prepared_terminal_state(self):
+        class AgentClient:
+            def get_agent(self, agentId):
+                return {
+                    "agent": {
+                        "agentName": "CodeBuddy-Reviewer",
+                        "agentResourceRoleArn": "arn:role",
+                        "foundationModel": "global.test",
+                        "description": "description",
+                        "idleSessionTTLInSeconds": 1800,
+                    }
+                }
+
+            def update_agent(self, **kwargs):
+                return {"agent": kwargs}
+
+        state = AgentState("AGENT", "ALIAS", "arn:role")
+
+        with patch("src.setup_github_tool.wait_for_status") as wait:
+            with redirect_stdout(io.StringIO()):
+                update_agent_for_github_tool(
+                    AgentClient(),
+                    state,
+                    load_config(),
+                )
+
+        self.assertEqual(
+            wait.call_args.kwargs["success_statuses"],
+            {"NOT_PREPARED", "PREPARED"},
+        )
 
 
 if __name__ == "__main__":

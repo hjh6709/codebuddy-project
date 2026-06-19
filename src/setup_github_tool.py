@@ -220,7 +220,7 @@ def update_agent_for_github_tool(
     wait_for_status(
         lambda: agent_client.get_agent(agentId=state.agent_id)["agent"],
         status_key="agentStatus",
-        success_statuses={"NOT_PREPARED"},
+        success_statuses={"NOT_PREPARED", "PREPARED"},
         failure_statuses={"FAILED", "DELETING"},
     )
     print("✅ Agent Instructions에 GitHub Tool 규칙 반영")
