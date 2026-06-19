@@ -1,0 +1,245 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "CodeBuddy serverless review API and asynchronous Bedrock Agent worker",
+  "Parameters": {
+    "ArtifactBucket": {"Type": "String"},
+    "OrchestratorCodeKey": {"Type": "String"},
+    "WorkerCodeKey": {"Type": "String"},
+    "AgentId": {"Type": "String"},
+    "AliasId": {"Type": "String"},
+    "AllowedOrigin": {
+      "Type": "String",
+      "Default": "https://github.com",
+      "AllowedPattern": "^https://[^*]+$",
+      "ConstraintDescription": "Use one explicit HTTPS origin without wildcards."
+    }
+  },
+  "Resources": {
+    "WorkerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {"Fn::Sub": "CodeBuddyReviewWorkerRole-${AWS::Region}"},
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": ["lambda.amazonaws.com"]},
+            "Action": ["sts:AssumeRole"]
+          }]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ],
+        "Policies": [{
+          "PolicyName": "InvokeCodeBuddyAgent",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": ["bedrock:InvokeAgent"],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:agent-alias/${AgentId}/${AliasId}"
+              }
+            }]
+          }
+        }]
+      }
+    },
+    "ReviewWorkerFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "codebuddy-review-worker",
+        "Runtime": "python3.12",
+        "Handler": "codebuddy_review_worker.handler",
+        "Role": {"Fn::GetAtt": ["WorkerRole", "Arn"]},
+        "Timeout": 360,
+        "MemorySize": 1024,
+        "Code": {
+          "S3Bucket": {"Ref": "ArtifactBucket"},
+          "S3Key": {"Ref": "WorkerCodeKey"}
+        },
+        "Environment": {
+          "Variables": {
+            "AGENT_ID": {"Ref": "AgentId"},
+            "ALIAS_ID": {"Ref": "AliasId"}
+          }
+        }
+      }
+    },
+    "OrchestratorRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {"Fn::Sub": "CodeBuddyOrchestratorRole-${AWS::Region}"},
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": ["lambda.amazonaws.com"]},
+            "Action": ["sts:AssumeRole"]
+          }]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ],
+        "Policies": [{
+          "PolicyName": "InvokeCodeBuddyReviewWorker",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": ["lambda:InvokeFunction"],
+              "Resource": {"Fn::GetAtt": ["ReviewWorkerFunction", "Arn"]}
+            }]
+          }
+        }]
+      }
+    },
+    "OrchestratorFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "codebuddy-orchestrator",
+        "Runtime": "python3.12",
+        "Handler": "codebuddy_orchestrator.handler",
+        "Role": {"Fn::GetAtt": ["OrchestratorRole", "Arn"]},
+        "Timeout": 30,
+        "MemorySize": 256,
+        "Code": {
+          "S3Bucket": {"Ref": "ArtifactBucket"},
+          "S3Key": {"Ref": "OrchestratorCodeKey"}
+        },
+        "Environment": {
+          "Variables": {
+            "WORKER_FUNCTION_NAME": {"Ref": "ReviewWorkerFunction"},
+            "ALLOWED_ORIGIN": {"Ref": "AllowedOrigin"}
+          }
+        }
+      }
+    },
+    "ReviewApi": {
+      "Type": "AWS::ApiGateway::RestApi",
+      "Properties": {
+        "Name": "CodeBuddyAPI",
+        "Description": "CodeBuddy asynchronous Pull Request review API",
+        "EndpointConfiguration": {"Types": ["REGIONAL"]}
+      }
+    },
+    "ReviewResource": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "RestApiId": {"Ref": "ReviewApi"},
+        "ParentId": {"Fn::GetAtt": ["ReviewApi", "RootResourceId"]},
+        "PathPart": "review"
+      }
+    },
+    "ReviewPostMethod": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "RestApiId": {"Ref": "ReviewApi"},
+        "ResourceId": {"Ref": "ReviewResource"},
+        "HttpMethod": "POST",
+        "AuthorizationType": "NONE",
+        "ApiKeyRequired": true,
+        "Integration": {
+          "Type": "AWS_PROXY",
+          "IntegrationHttpMethod": "POST",
+          "Uri": {
+            "Fn::Sub": "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrchestratorFunction.Arn}/invocations"
+          }
+        }
+      }
+    },
+    "ReviewOptionsMethod": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "RestApiId": {"Ref": "ReviewApi"},
+        "ResourceId": {"Ref": "ReviewResource"},
+        "HttpMethod": "OPTIONS",
+        "AuthorizationType": "NONE",
+        "ApiKeyRequired": false,
+        "Integration": {
+          "Type": "AWS_PROXY",
+          "IntegrationHttpMethod": "POST",
+          "Uri": {
+            "Fn::Sub": "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrchestratorFunction.Arn}/invocations"
+          }
+        }
+      }
+    },
+    "ApiInvokePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {"Ref": "OrchestratorFunction"},
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ReviewApi}/*/*"
+        }
+      }
+    },
+    "ReviewDeployment": {
+      "Type": "AWS::ApiGateway::Deployment",
+      "DependsOn": ["ReviewPostMethod", "ReviewOptionsMethod"],
+      "Properties": {"RestApiId": {"Ref": "ReviewApi"}}
+    },
+    "ReviewStage": {
+      "Type": "AWS::ApiGateway::Stage",
+      "Properties": {
+        "RestApiId": {"Ref": "ReviewApi"},
+        "DeploymentId": {"Ref": "ReviewDeployment"},
+        "StageName": "prod",
+        "MethodSettings": [{
+          "HttpMethod": "*",
+          "ResourcePath": "/*",
+          "MetricsEnabled": true,
+          "ThrottlingBurstLimit": 10,
+          "ThrottlingRateLimit": 5
+        }]
+      }
+    },
+    "ReviewApiKey": {
+      "Type": "AWS::ApiGateway::ApiKey",
+      "Properties": {
+        "Name": "CodeBuddyReviewApiKey",
+        "Enabled": true,
+        "StageKeys": [{
+          "RestApiId": {"Ref": "ReviewApi"},
+          "StageName": {"Ref": "ReviewStage"}
+        }]
+      }
+    },
+    "ReviewUsagePlan": {
+      "Type": "AWS::ApiGateway::UsagePlan",
+      "Properties": {
+        "UsagePlanName": "CodeBuddyReviewUsagePlan",
+        "ApiStages": [{
+          "ApiId": {"Ref": "ReviewApi"},
+          "Stage": {"Ref": "ReviewStage"}
+        }],
+        "Throttle": {"BurstLimit": 5, "RateLimit": 2},
+        "Quota": {"Limit": 1000, "Period": "MONTH"}
+      }
+    },
+    "ReviewUsagePlanKey": {
+      "Type": "AWS::ApiGateway::UsagePlanKey",
+      "Properties": {
+        "KeyId": {"Ref": "ReviewApiKey"},
+        "KeyType": "API_KEY",
+        "UsagePlanId": {"Ref": "ReviewUsagePlan"}
+      }
+    }
+  },
+  "Outputs": {
+    "ReviewApiUrl": {
+      "Value": {
+        "Fn::Sub": "https://${ReviewApi}.execute-api.${AWS::Region}.amazonaws.com/prod/review"
+      }
+    },
+    "ApiKeyId": {"Value": {"Ref": "ReviewApiKey"}},
+    "OrchestratorFunctionArn": {
+      "Value": {"Fn::GetAtt": ["OrchestratorFunction", "Arn"]}
+    },
+    "ReviewWorkerFunctionArn": {
+      "Value": {"Fn::GetAtt": ["ReviewWorkerFunction", "Arn"]}
+    }
+  }
+}
