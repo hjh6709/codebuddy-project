@@ -6,6 +6,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from src import setup_serverless
+from src import setup_serverless
 from src.setup_serverless import (
     build_lambda_zip,
     build_stack_parameters,
@@ -62,12 +63,18 @@ class TemplateTests(unittest.TestCase):
         self.assertIn("ReviewWorkerFunction", resources)
         self.assertIn("ReviewApiKey", resources)
         self.assertIn("ReviewUsagePlan", resources)
+        self.assertIn("WebhookSecret", resources)
+        self.assertIn("WebhookResource", resources)
+        self.assertIn("GitHubWebhookResource", resources)
+        self.assertIn("GitHubWebhookPostMethod", resources)
 
     def test_template_outputs_review_url(self):
         template = load_template()
 
         self.assertIn("ReviewApiUrl", template["Outputs"])
         self.assertIn("ApiKeyId", template["Outputs"])
+        self.assertIn("GitHubWebhookUrl", template["Outputs"])
+        self.assertIn("WebhookSecretArn", template["Outputs"])
 
     def test_worker_role_can_only_invoke_configured_agent_alias(self):
         template = load_template()
@@ -92,6 +99,46 @@ class TemplateTests(unittest.TestCase):
         )
         self.assertFalse(
             resources["ReviewOptionsMethod"]["Properties"]["ApiKeyRequired"]
+        )
+        self.assertIn("GitHubWebhookPostMethod", resources)
+        self.assertFalse(
+            resources.get(
+                "GitHubWebhookPostMethod",
+                {"Properties": {"ApiKeyRequired": True}},
+            )["Properties"][
+                "ApiKeyRequired"
+            ]
+        )
+
+    def test_orchestrator_can_read_only_generated_webhook_secret(self):
+        template = load_template()
+        policies = template["Resources"]["OrchestratorRole"]["Properties"][
+            "Policies"
+        ]
+        secret_policies = [
+            policy
+            for policy in policies
+            if policy["PolicyName"] == "ReadGitHubWebhookSecret"
+        ]
+        self.assertEqual(len(secret_policies), 1)
+        secret_policy = secret_policies[0]
+        statement = secret_policy["PolicyDocument"]["Statement"][0]
+
+        self.assertEqual(
+            statement["Action"],
+            ["secretsmanager:GetSecretValue"],
+        )
+        self.assertEqual(
+            statement["Resource"],
+            {"Ref": "WebhookSecret"},
+        )
+
+    def test_api_deployment_depends_on_webhook_method(self):
+        deployment = load_template()["Resources"]["ReviewDeployment"]
+
+        self.assertIn(
+            "GitHubWebhookPostMethod",
+            deployment["DependsOn"],
         )
 
     def test_stage_and_usage_plan_apply_throttling(self):
@@ -168,6 +215,8 @@ class StateTests(unittest.TestCase):
                 {
                     "ReviewApiUrl": "https://example.com/review",
                     "ApiKeyId": "key-1",
+                    "GitHubWebhookUrl": "https://example.com/webhook/github",
+                    "WebhookSecretArn": "arn:aws:secretsmanager:secret-1",
                     "api_key_value": "must-not-be-written",
                 },
             )
@@ -177,6 +226,12 @@ class StateTests(unittest.TestCase):
                 {
                     "review_api_url": "https://example.com/review",
                     "api_key_id": "key-1",
+                    "github_webhook_url": (
+                        "https://example.com/webhook/github"
+                    ),
+                    "webhook_secret_arn": (
+                        "arn:aws:secretsmanager:secret-1"
+                    ),
                 },
             )
 
@@ -193,6 +248,140 @@ class StackStateTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "ROLLBACK_FAILED"):
             stack_exists(CloudFormationClient(), "CodeBuddyServerless")
+
+
+class GitHubWebhookConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.assertTrue(
+            hasattr(setup_serverless, "build_github_webhook_payload")
+        )
+        self.assertTrue(
+            hasattr(setup_serverless, "ensure_github_webhook")
+        )
+        self.assertTrue(
+            hasattr(setup_serverless, "configure_github_webhook")
+        )
+
+    def test_build_github_webhook_payload_uses_hmac_secret(self):
+        payload = setup_serverless.build_github_webhook_payload(
+            "https://example.com/prod/webhook/github",
+            "webhook-secret",
+        )
+
+        self.assertEqual(payload["events"], ["pull_request"])
+        self.assertTrue(payload["active"])
+        self.assertEqual(payload["config"]["content_type"], "json")
+        self.assertEqual(
+            payload["config"]["url"],
+            "https://example.com/prod/webhook/github",
+        )
+        self.assertEqual(
+            payload["config"]["secret"],
+            "webhook-secret",
+        )
+
+    def test_ensure_github_webhook_creates_missing_hook(self):
+        calls = []
+
+        def request_json(method, path, payload=None):
+            calls.append((method, path, payload))
+            return [] if method == "GET" else {"id": 7}
+
+        hook_id = setup_serverless.ensure_github_webhook(
+            request_json,
+            "hjh6709",
+            "codebuddy-project",
+            "https://example.com/prod/webhook/github",
+            "webhook-secret",
+        )
+
+        self.assertEqual(hook_id, 7)
+        self.assertEqual(calls[1][0], "POST")
+        self.assertEqual(
+            calls[1][1],
+            "/repos/hjh6709/codebuddy-project/hooks",
+        )
+
+    def test_ensure_github_webhook_updates_matching_hook(self):
+        calls = []
+
+        def request_json(method, path, payload=None):
+            calls.append((method, path, payload))
+            if method == "GET":
+                return [
+                    {
+                        "id": 9,
+                        "config": {
+                            "url": (
+                                "https://example.com/prod/webhook/github"
+                            )
+                        },
+                    }
+                ]
+            return {"id": 9}
+
+        hook_id = setup_serverless.ensure_github_webhook(
+            request_json,
+            "hjh6709",
+            "codebuddy-project",
+            "https://example.com/prod/webhook/github",
+            "rotated-secret",
+        )
+
+        self.assertEqual(hook_id, 9)
+        self.assertEqual(calls[1][0], "PATCH")
+        self.assertEqual(
+            calls[1][1],
+            "/repos/hjh6709/codebuddy-project/hooks/9",
+        )
+
+    def test_configure_github_webhook_reads_secret_without_returning_it(self):
+        class SecretsClient:
+            def get_secret_value(self, **kwargs):
+                self.request = kwargs
+                return {"SecretString": "webhook-secret"}
+
+        secrets_client = SecretsClient()
+        calls = []
+
+        def request_json(method, path, payload=None):
+            calls.append((method, path, payload))
+            return [] if method == "GET" else {"id": 11}
+
+        hook_id = setup_serverless.configure_github_webhook(
+            secrets_client,
+            request_json,
+            "hjh6709/codebuddy-project",
+            {
+                "GitHubWebhookUrl": (
+                    "https://example.com/prod/webhook/github"
+                ),
+                "WebhookSecretArn": "arn:secret",
+            },
+        )
+
+        self.assertEqual(hook_id, 11)
+        self.assertEqual(
+            secrets_client.request,
+            {"SecretId": "arn:secret"},
+        )
+        self.assertNotEqual(hook_id, "webhook-secret")
+        self.assertEqual(
+            calls[1][2]["config"]["secret"],
+            "webhook-secret",
+        )
+
+    def test_configure_github_webhook_rejects_invalid_repository(self):
+        with self.assertRaisesRegex(ValueError, "owner/repository"):
+            setup_serverless.configure_github_webhook(
+                object(),
+                lambda *args: None,
+                "invalid-repository",
+                {
+                    "GitHubWebhookUrl": "https://example.com/webhook",
+                    "WebhookSecretArn": "arn:secret",
+                },
+            )
 
 
 if __name__ == "__main__":

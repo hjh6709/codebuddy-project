@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import boto3
@@ -21,6 +23,7 @@ ORCHESTRATOR_SOURCE = ROOT / "lambda" / "codebuddy_orchestrator.py"
 WORKER_SOURCE = ROOT / "lambda" / "codebuddy_review_worker.py"
 STACK_NAME = "CodeBuddyServerless"
 STATE_PATH = ROOT / ".codebuddy" / "serverless-state.json"
+GITHUB_API = "https://api.github.com"
 
 
 def build_lambda_zip(source_path: Path) -> bytes:
@@ -67,12 +70,122 @@ def save_serverless_state(path: Path, outputs: dict[str, str]) -> None:
     state = {
         "review_api_url": outputs["ReviewApiUrl"],
         "api_key_id": outputs["ApiKeyId"],
+        "github_webhook_url": outputs["GitHubWebhookUrl"],
+        "webhook_secret_arn": outputs["WebhookSecretArn"],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def build_github_webhook_payload(
+    webhook_url: str,
+    secret: str,
+) -> dict[str, Any]:
+    return {
+        "name": "web",
+        "active": True,
+        "events": ["pull_request"],
+        "config": {
+            "url": webhook_url,
+            "content_type": "json",
+            "insecure_ssl": "0",
+            "secret": secret,
+        },
+    }
+
+
+def ensure_github_webhook(
+    request_json: Any,
+    owner: str,
+    repo: str,
+    webhook_url: str,
+    secret: str,
+) -> int:
+    hooks_path = f"/repos/{owner}/{repo}/hooks"
+    hooks = request_json("GET", hooks_path)
+    matching_hook = next(
+        (
+            hook
+            for hook in hooks
+            if hook.get("config", {}).get("url") == webhook_url
+        ),
+        None,
+    )
+    payload = build_github_webhook_payload(webhook_url, secret)
+    if matching_hook:
+        hook_id = int(matching_hook["id"])
+        response = request_json(
+            "PATCH",
+            f"{hooks_path}/{hook_id}",
+            payload,
+        )
+    else:
+        response = request_json("POST", hooks_path, payload)
+    return int(response["id"])
+
+
+def configure_github_webhook(
+    secrets_client: Any,
+    request_json: Any,
+    repository: str,
+    outputs: dict[str, str],
+) -> int:
+    parts = repository.split("/")
+    if len(parts) != 2 or not all(parts):
+        raise ValueError(
+            "CODEBUDDY_GITHUB_REPOSITORY must use owner/repository"
+        )
+    secret = secrets_client.get_secret_value(
+        SecretId=outputs["WebhookSecretArn"]
+    ).get("SecretString")
+    if not secret:
+        raise ValueError("GitHub webhook secret is unavailable")
+    return ensure_github_webhook(
+        request_json,
+        parts[0],
+        parts[1],
+        outputs["GitHubWebhookUrl"],
+        secret,
+    )
+
+
+def build_github_request_json(token: str):
+    def request_json(
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> Any:
+        body = (
+            json.dumps(payload).encode("utf-8")
+            if payload is not None
+            else None
+        )
+        request = Request(
+            f"{GITHUB_API}{path}",
+            data=body,
+            method=method,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "User-Agent": "CodeBuddy-Serverless-Setup",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            raise RuntimeError(
+                f"GitHub API request failed with HTTP {exc.code}"
+            ) from exc
+        except URLError as exc:
+            raise RuntimeError("GitHub API request failed") from exc
+
+    return request_json
 
 
 def ensure_artifact_bucket(s3_client: Any, bucket_name: str, region: str) -> None:
@@ -142,6 +255,7 @@ def deploy_serverless() -> dict[str, str]:
     sts_client = session.client("sts")
     s3_client = session.client("s3")
     cfn_client = session.client("cloudformation")
+    secrets_client = session.client("secretsmanager")
 
     account_id = sts_client.get_caller_identity()["Account"]
     bucket = f"codebuddy-artifacts-{account_id}-{config.region}"
@@ -193,6 +307,21 @@ def deploy_serverless() -> dict[str, str]:
         for item in stack.get("Outputs", [])
     }
     save_serverless_state(STATE_PATH, outputs)
+    repository = os.environ.get("CODEBUDDY_GITHUB_REPOSITORY")
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if repository and github_token:
+        hook_id = configure_github_webhook(
+            secrets_client,
+            build_github_request_json(github_token),
+            repository,
+            outputs,
+        )
+        print(f"✅ GitHub webhook 연결 완료: hook {hook_id}")
+    else:
+        print(
+            "ℹ️ GitHub webhook 연결 생략: "
+            "CODEBUDDY_GITHUB_REPOSITORY와 GITHUB_TOKEN을 설정하세요."
+        )
     print(f"✅ CodeBuddy 서버리스 API 배포: {outputs['ReviewApiUrl']}")
     print(f"💾 API 상태 저장: {STATE_PATH}")
     return outputs
