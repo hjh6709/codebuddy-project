@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from typing import Any
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 
 try:
@@ -61,6 +62,11 @@ def invoke(
     runtime = boto3.client(
         "bedrock-agent-runtime",
         region_name=config.region,
+        config=Config(
+            connect_timeout=10,
+            read_timeout=300,
+            retries={"max_attempts": 3, "mode": "standard"},
+        ),
     )
     response = runtime.invoke_agent(
         agentId=state.agent_id,

@@ -1,9 +1,10 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from botocore.exceptions import NoCredentialsError
 
-from src.invoke_agent import build_code_review_prompt, main, parse_completion
+from src.invoke_agent import build_code_review_prompt, invoke, main, parse_completion
 
 
 class CompletionParserTests(unittest.TestCase):
@@ -51,6 +52,32 @@ class PromptTests(unittest.TestCase):
         self.assertIn("```python", prompt)
         self.assertIn("def add(a, b)", prompt)
         self.assertIn("보안 취약점", prompt)
+
+
+class RuntimeClientTests(unittest.TestCase):
+    def test_invoke_uses_long_read_timeout_for_pr_reviews(self):
+        runtime = SimpleNamespace(
+            invoke_agent=lambda **kwargs: {"completion": []}
+        )
+        config = SimpleNamespace(
+            region="ap-northeast-2",
+            state_path=".codebuddy/agent-state.json",
+        )
+        state = SimpleNamespace(agent_id="AGENT1", alias_id="ALIAS1")
+
+        with (
+            patch("src.invoke_agent.load_config", return_value=config),
+            patch("src.invoke_agent.load_state", return_value=state),
+            patch(
+                "src.invoke_agent.boto3.client",
+                return_value=runtime,
+            ) as client,
+        ):
+            invoke("PR을 리뷰해줘")
+
+        client_config = client.call_args.kwargs.get("config")
+        self.assertIsNotNone(client_config)
+        self.assertGreaterEqual(client_config.read_timeout, 300)
 
 
 class MainErrorHandlingTests(unittest.TestCase):
