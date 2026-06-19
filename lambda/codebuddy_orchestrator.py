@@ -5,12 +5,20 @@ import os
 from urllib.parse import urlparse
 
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 
 LOGGER = logging.getLogger(__name__)
-LOGGER.setLevel(logging.INFO)
+LOGGER.setLevel(
+    getattr(
+        logging,
+        os.environ.get("LOG_LEVEL", "INFO").upper(),
+        logging.INFO,
+    )
+)
 
-ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "null")
+_LAMBDA_CLIENT = None
 
 
 class RequestError(Exception):
@@ -68,15 +76,26 @@ def parse_pr_url(pr_url):
     return parts[0], parts[1], pr_number
 
 
+def get_lambda_client():
+    global _LAMBDA_CLIENT
+    if _LAMBDA_CLIENT is None:
+        _LAMBDA_CLIENT = boto3.client("lambda")
+    return _LAMBDA_CLIENT
+
+
 def dispatch_worker(payload):
     function_name = os.environ.get("WORKER_FUNCTION_NAME")
     if not function_name:
         raise RequestError(500, "WORKER_FUNCTION_NAME must be configured")
-    boto3.client("lambda").invoke(
-        FunctionName=function_name,
-        InvocationType="Event",
-        Payload=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-    )
+    try:
+        get_lambda_client().invoke(
+            FunctionName=function_name,
+            InvocationType="Event",
+            Payload=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        )
+    except (BotoCoreError, ClientError) as exc:
+        LOGGER.error("Worker Lambda invocation failed: %s", type(exc).__name__)
+        raise RequestError(503, "Worker dispatch failed, please retry") from exc
 
 
 def handle_review(event):
