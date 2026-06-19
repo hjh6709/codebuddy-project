@@ -46,6 +46,8 @@ Amazon Bedrock Agent
 ├── README.md
 ├── cloudformation/
 │   └── codebuddy-serverless.yaml
+├── docs/
+│   └── api-spec.yaml
 ├── lambda/
 │   ├── codebuddy_orchestrator.py
 │   ├── codebuddy_review_worker.py
@@ -131,6 +133,9 @@ python -m src.setup_serverless
 - GitHub Repository Webhook
 
 ## API
+
+전체 요청·응답 및 오류 코드는
+[OpenAPI 3.0 명세](docs/api-spec.yaml)에서 확인할 수 있습니다.
 
 ### 수동 PR 리뷰
 
