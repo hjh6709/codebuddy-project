@@ -1,6 +1,6 @@
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from json import JSONDecodeError
 from pathlib import Path
 
@@ -22,6 +22,8 @@ class AgentState:
     agent_id: str
     alias_id: str
     role_arn: str
+    lambda_arn: str | None = None
+    action_group_id: str | None = None
 
 
 def load_config() -> AgentConfig:
@@ -68,6 +70,20 @@ def load_state(path: Path) -> AgentState:
             agent_id=data["agent_id"],
             alias_id=data["alias_id"],
             role_arn=data["role_arn"],
+            lambda_arn=data.get("lambda_arn"),
+            action_group_id=data.get("action_group_id"),
         )
     except (JSONDecodeError, KeyError, TypeError) as exc:
         raise ValueError(f"Agent 상태 파일을 읽을 수 없습니다: {path}") from exc
+
+
+def update_tool_state(
+    state: AgentState,
+    lambda_arn: str,
+    action_group_id: str,
+) -> AgentState:
+    return replace(
+        state,
+        lambda_arn=lambda_arn,
+        action_group_id=action_group_id,
+    )

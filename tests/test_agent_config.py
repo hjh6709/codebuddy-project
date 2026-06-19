@@ -4,7 +4,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.agent_config import AgentState, load_config, load_state, save_state
+from src.agent_config import (
+    AgentState,
+    load_config,
+    load_state,
+    save_state,
+    update_tool_state,
+)
 
 
 class AgentConfigTests(unittest.TestCase):
@@ -60,6 +66,36 @@ class AgentConfigTests(unittest.TestCase):
 
             with self.assertRaisesRegex(FileNotFoundError, "setup_agent.py"):
                 load_state(path)
+
+    def test_load_state_accepts_chapter5_state_without_tool_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            path.write_text(
+                '{"agent_id":"A","alias_id":"B","role_arn":"arn:test"}',
+                encoding="utf-8",
+            )
+
+            state = load_state(path)
+
+            self.assertIsNone(state.lambda_arn)
+            self.assertIsNone(state.action_group_id)
+
+    def test_update_tool_state_preserves_agent_values(self):
+        state = AgentState(
+            agent_id="A",
+            alias_id="B",
+            role_arn="arn:test",
+        )
+
+        updated = update_tool_state(
+            state,
+            lambda_arn="arn:lambda",
+            action_group_id="AG1",
+        )
+
+        self.assertEqual(updated.agent_id, "A")
+        self.assertEqual(updated.lambda_arn, "arn:lambda")
+        self.assertEqual(updated.action_group_id, "AG1")
 
 
 if __name__ == "__main__":
