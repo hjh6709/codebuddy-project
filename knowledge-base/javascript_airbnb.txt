@@ -1,0 +1,11 @@
+Airbnb JavaScript Style Guide
+
+## Variables
+- `const` for all references; avoid `var`.
+- `let` if you plan on reassigning your variable.
+## Objects
+- Use trailing commas.
+## Arrays
+- Use array literals.
+## Functions
+- Use named function expressions.

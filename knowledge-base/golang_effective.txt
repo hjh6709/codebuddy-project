@@ -1,0 +1,10 @@
+Effective Go Style Guide
+
+## Formatting
+- Use gofmt for automatic formatting.
+- Indentation uses tabs.
+## Names
+- Use MixedCaps or mixedCaps rather than underscores.
+- Package names should be short, lower case, single words.
+## Semicolons
+- Semicolons are usually inserted automatically by the lexer.
