@@ -74,10 +74,17 @@ class ActionGroupSelectionTests(unittest.TestCase):
         self.assertIsNone(find_action_group([], "CodeBuddyTools"))
 
     def test_disable_legacy_github_action_group(self):
-        self.assertTrue(
-            hasattr(setup_codebuddy_tools, "disable_legacy_action_groups")
-        )
         updates = []
+        legacy_schema = {
+            "payload": json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "info": {"title": "Legacy", "version": "1.0.0"},
+                    "paths": {},
+                }
+            )
+        }
+        legacy_executor = {"lambda": "arn:aws:lambda:region:account:function:old"}
 
         class AgentClient:
             def list_agent_action_groups(self, **kwargs):
@@ -94,6 +101,16 @@ class ActionGroupSelectionTests(unittest.TestCase):
                             "actionGroupState": "ENABLED",
                         },
                     ]
+                }
+
+            def get_agent_action_group(self, **kwargs):
+                return {
+                    "agentActionGroup": {
+                        "actionGroupName": "GitHubPRTools",
+                        "actionGroupExecutor": legacy_executor,
+                        "apiSchema": legacy_schema,
+                        "description": "Legacy GitHub PR Tool",
+                    }
                 }
 
             def update_agent_action_group(self, **kwargs):
@@ -113,6 +130,9 @@ class ActionGroupSelectionTests(unittest.TestCase):
                     "actionGroupId": "OLD1",
                     "actionGroupName": "GitHubPRTools",
                     "actionGroupState": "DISABLED",
+                    "actionGroupExecutor": legacy_executor,
+                    "apiSchema": legacy_schema,
+                    "description": "Legacy GitHub PR Tool",
                 }
             ],
         )

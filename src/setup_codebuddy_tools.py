@@ -154,13 +154,29 @@ def disable_legacy_action_groups(
             or group.get("actionGroupState") == "DISABLED"
         ):
             continue
-        agent_client.update_agent_action_group(
+        current = agent_client.get_agent_action_group(
             agentId=agent_id,
             agentVersion="DRAFT",
             actionGroupId=group["actionGroupId"],
-            actionGroupName=name,
-            actionGroupState="DISABLED",
-        )
+        )["agentActionGroup"]
+        request = {
+            "agentId": agent_id,
+            "agentVersion": "DRAFT",
+            "actionGroupId": group["actionGroupId"],
+            "actionGroupName": name,
+            "actionGroupState": "DISABLED",
+        }
+        for key in (
+            "actionGroupExecutor",
+            "apiSchema",
+            "functionSchema",
+            "parentActionGroupSignature",
+            "parentActionGroupSignatureParams",
+            "description",
+        ):
+            if key in current:
+                request[key] = current[key]
+        agent_client.update_agent_action_group(**request)
         print(f"✅ 기존 Action Group 비활성화: {name}")
 
 
